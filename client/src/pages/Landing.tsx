@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { TermButton } from "@/components/mastermind/TermButton";
+import { TermButton } from "@/components/codebreaker/TermButton";
 
 export default function Landing() {
   const [nickname, setNickname] = useState("");
@@ -12,7 +12,7 @@ export default function Landing() {
     <main className="min-h-screen flex items-center justify-center px-6">
       <div className="w-full max-w-[400px] flex flex-col gap-10">
         <header className="text-center">
-          <h1 className="text-4xl tracking-brand font-semibold">MASTERMIND</h1>
+          <h1 className="text-4xl tracking-brand font-semibold">CODEBREAKER</h1>
           <p className="mt-2 text-sm text-muted tracking-terminal">// 2-player codebreaking</p>
         </header>
 

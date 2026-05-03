@@ -9,7 +9,7 @@ import SetSecret from "./pages/SetSecret";
 import Game from "./pages/Game";
 import End from "./pages/End";
 import NotFound from "./pages/NotFound";
-import { DevNav } from "./components/mastermind/DevNav";
+import { DevNav } from "./components/codebreaker/DevNav";
 
 const queryClient = new QueryClient();
 

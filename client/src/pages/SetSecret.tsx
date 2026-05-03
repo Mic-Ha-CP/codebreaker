@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { DigitCells } from "@/components/mastermind/DigitCells";
-import { NumberPad } from "@/components/mastermind/NumberPad";
-import { TermButton } from "@/components/mastermind/TermButton";
+import { DigitCells } from "@/components/codebreaker/DigitCells";
+import { NumberPad } from "@/components/codebreaker/NumberPad";
+import { TermButton } from "@/components/codebreaker/TermButton";
 
 export default function SetSecret() {
   const navigate = useNavigate();

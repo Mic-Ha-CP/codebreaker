@@ -22,3 +22,37 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+##### 
+
+# deps
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# build
+dist/
+build/
+client/dist/
+
+# IDE
+.vscode/
+.cursor/
+.idea/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+
+# docs (local only)
+docs/

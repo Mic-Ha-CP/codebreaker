@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { TermButton } from "@/components/mastermind/TermButton";
+import { TermButton } from "@/components/codebreaker/TermButton";
 
 export default function Lobby() {
   const navigate = useNavigate();

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { TermButton } from "@/components/mastermind/TermButton";
-import { NumberPad } from "@/components/mastermind/NumberPad";
+import { TermButton } from "@/components/codebreaker/TermButton";
+import { NumberPad } from "@/components/codebreaker/NumberPad";
 import { cn } from "@/lib/utils";
 
 interface GuessRow { guess: number[]; exact: number; partial: number }
