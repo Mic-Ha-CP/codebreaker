@@ -1,0 +1,43 @@
+export const en = {
+  landing: {
+    title: 'CODEBREAKER',
+    subtitle: '// 2-player codebreaking',
+    nickname: 'enter nickname',
+    create: 'CREATE ROOM',
+    join: 'JOIN ROOM',
+    code: 'room code',
+  },
+  lobby: {
+    players: 'players',
+    rules: 'rules',
+    ready: 'ready',
+    host: 'HOST',
+    waiting: '> waiting...',
+    starting: '> starting in 5...',
+    leave: '[ LEAVE ]',
+    start: '[ START NOW ]',
+  },
+  game: {
+    yourTurn: 'your turn. enter your guess.',
+    opponentTurn: "opponent's turn.",
+    locked: '(locked)',
+    typing: '(typing...)',
+    disconnected: (secs: number) => `opponent disconnected — ${secs}s`,
+  },
+  feedback: {
+    helpTitle: '// FEEDBACK',
+    exact: 'E = exact',
+    exactDesc: '(digit and position correct)',
+    partial: 'P = partial',
+    partialDesc: '(digit correct, wrong position)',
+    close: '[ CLOSE ]',
+  },
+  end: {
+    win: 'YOU WIN',
+    lose: 'YOU LOSE',
+    draw: 'DRAW',
+    opponentCode: "opponent's code was",
+    rematch: '[ REMATCH ]',
+    leave: '[ LEAVE ROOM ]',
+  },
+};

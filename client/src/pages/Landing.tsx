@@ -1,12 +1,23 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { TermButton } from "@/components/codebreaker/TermButton";
+import { useGameStore } from "@/state/gameStore";
 
 export default function Landing() {
-  const [nickname, setNickname] = useState("");
+  const [nickname, setNicknameLocal] = useState("");
   const [showJoin, setShowJoin] = useState(false);
   const [code, setCode] = useState("");
-  const navigate = useNavigate();
+
+  const { setNickname, createRoom, joinRoom } = useGameStore();
+
+  const handleCreate = () => {
+    setNickname(nickname);
+    createRoom(); // stub — M3: connects socket + emits C2S.CREATE_ROOM
+  };
+
+  const handleJoin = () => {
+    setNickname(nickname);
+    joinRoom(code); // stub — M3: connects socket + emits C2S.JOIN_ROOM
+  };
 
   return (
     <main className="min-h-screen flex items-center justify-center px-6">
@@ -20,14 +31,14 @@ export default function Landing() {
           <label className="text-xs uppercase tracking-terminal text-muted">nickname</label>
           <input
             value={nickname}
-            onChange={(e) => setNickname(e.target.value)}
+            onChange={(e) => setNicknameLocal(e.target.value)}
             placeholder="enter nickname"
             className="w-full bg-transparent border border-border px-4 py-3 text-foreground placeholder:text-muted focus:outline-none focus:border-foreground transition-colors"
           />
         </div>
 
         <div className="flex flex-col gap-3">
-          <TermButton variant="primary" onClick={() => navigate("/lobby")}>
+          <TermButton variant="primary" disabled={!nickname} onClick={handleCreate}>
             CREATE ROOM
           </TermButton>
           <TermButton variant="secondary" onClick={() => setShowJoin((s) => !s)}>
@@ -46,8 +57,8 @@ export default function Landing() {
               />
               <TermButton
                 variant="filled"
-                disabled={code.length !== 4}
-                onClick={() => navigate("/lobby")}
+                disabled={code.length !== 4 || !nickname}
+                onClick={handleJoin}
               >
                 ENTER →
               </TermButton>

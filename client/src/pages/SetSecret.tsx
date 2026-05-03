@@ -1,80 +1,86 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { DigitCells } from "@/components/codebreaker/DigitCells";
 import { NumberPad } from "@/components/codebreaker/NumberPad";
 import { TermButton } from "@/components/codebreaker/TermButton";
+import { useGameStore } from "@/state/gameStore";
 
 export default function SetSecret() {
-  const navigate = useNavigate();
-  const [digits, setDigits] = useState<(number | null)[]>([null, null, null, null]);
+  const {
+    roomState,
+    inputBuffer,
+    cursorPos,
+    inputDigit,
+    deleteDigit,
+    setCursor,
+    submitSecret,
+    leaveRoom,
+  } = useGameStore();
+
+  // locked stays local in M2 since submitSecret is a stub and won't update roomState
   const [locked, setLocked] = useState(false);
 
-  const cursor = locked ? null : digits.findIndex((d) => d === null);
+  const rules = roomState?.rules;
+  const codeLength = rules?.codeLength ?? 4;
+  const digits = inputBuffer.slice(0, codeLength);
+  const canSubmit = digits.every((d) => d !== null) && !locked;
 
   const onDigit = (d: number) => {
     if (locked) return;
-    if (digits.includes(d)) return; // no repeats
-    const i = digits.findIndex((x) => x === null);
-    if (i === -1) return;
-    const next = [...digits];
-    next[i] = d;
-    setDigits(next);
+    if (!rules?.allowRepeats && digits.includes(d)) return;
+    inputDigit(d);
   };
+
   const onDelete = () => {
     if (locked) return;
-    const filled = [...digits];
-    for (let i = filled.length - 1; i >= 0; i--) {
-      if (filled[i] !== null) {
-        filled[i] = null;
-        break;
-      }
-    }
-    setDigits(filled);
+    deleteDigit();
   };
+
   const onSubmit = () => {
-    if (digits.every((d) => d !== null)) setLocked(true);
+    if (!canSubmit) return;
+    setLocked(true);
+    submitSecret(); // stub — M3: socket.emit(C2S.SUBMIT_SECRET, { secret: digits })
   };
 
   return (
     <div className="min-h-screen flex flex-col">
       <header className="flex items-center justify-between border-b border-border-soft px-6 py-4 text-sm tracking-terminal">
         <div>
-          ROOM <span className="text-muted">#</span>X3K9
+          ROOM <span className="text-muted">#</span>{roomState?.code ?? '—'}
           <span className="text-muted"> // SET YOUR CODE</span>
         </div>
-        <TermButton variant="secondary" onClick={() => navigate("/lobby")}>[ LEAVE ]</TermButton>
+        <TermButton variant="secondary" onClick={leaveRoom}>[ LEAVE ]</TermButton>
       </header>
 
       <main className="flex-1 grid grid-cols-[1fr_280px]">
         <section className="flex flex-col items-center justify-center p-12 gap-10 border-r border-border-soft">
-          <DigitCells values={digits} cursor={cursor} size="lg" />
-          <p className="text-sm text-muted tracking-terminal">Pick 4 digits. Repeats not allowed.</p>
+          <DigitCells
+            values={digits}
+            cursor={locked ? null : cursorPos}
+            size="lg"
+            onCellClick={locked ? undefined : setCursor}
+          />
+          <p className="text-sm text-muted tracking-terminal">
+            Pick {codeLength} digits.{rules?.allowRepeats ? '' : ' Repeats not allowed.'}
+          </p>
 
           <div className="w-full max-w-[420px]">
             <NumberPad
               onDigit={onDigit}
               onDelete={onDelete}
               onSubmit={onSubmit}
-              canSubmit={digits.every((d) => d !== null) && !locked}
+              canSubmit={canSubmit}
               disabled={locked}
             />
           </div>
 
           {locked && (
-            <div className="font-mono text-muted text-sm">
-              &gt; code locked. waiting for opponent...
-            </div>
+            <p className="font-mono text-muted text-sm">&gt; code locked. waiting for opponent...</p>
           )}
         </section>
 
         <aside className="p-8">
           <h3 className="text-xs uppercase tracking-terminal text-muted mb-4">opponent</h3>
           <p className="font-mono text-sm">&gt; setting code...</p>
-          <div className="mt-8">
-            <TermButton variant="ghost" onClick={() => navigate("/game")}>
-              [mock: continue →]
-            </TermButton>
-          </div>
         </aside>
       </main>
     </div>
