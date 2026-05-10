@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useGameStore } from "@/state/gameStore";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
@@ -11,6 +12,13 @@ import { DevNav } from "./components/codebreaker/DevNav";
 
 const App = () => {
   const phase = useGameStore((s) => s.roomState?.phase);
+  const connect = useGameStore((s) => s.connect);
+  const disconnect = useGameStore((s) => s.disconnect);
+
+  useEffect(() => {
+    connect();
+    return () => disconnect();
+  }, []);
 
   return (
     <TooltipProvider>

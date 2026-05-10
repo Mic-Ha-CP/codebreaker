@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { io, Socket } from 'socket.io-client';
+import { C2S } from '../../../shared/events';
 import type {
   ClientRoomState,
   ClientPlayerGameState,
@@ -8,10 +10,77 @@ import type {
   RoomPhase,
 } from '../../../shared/types';
 
+const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+
+// Module-level socket reference — initialized once
+let socket: Socket | null = null;
+
+function getSocket(): Socket | null {
+  return socket;
+}
+
+function connectSocket(): Socket {
+  if (socket?.connected) return socket;
+  socket = io(SERVER_URL);
+  return socket;
+}
+
+function disconnectSocket(): void {
+  socket?.disconnect();
+  socket = null;
+}
+
+// ─── Store ────────────────────────────────────────────────────────────────────
+
+interface GameStore {
+  // connection
+  connected: boolean;
+
+  // identity
+  myId: string | null;
+  nickname: string;
+
+  // room
+  roomState: ClientRoomState | null;
+  gameEndPayload: GameEndPayload | null;
+
+  // digit input (shared between SetSecret and Game screens)
+  inputBuffer: (number | null)[];
+  cursorPos: number;
+
+  // opponent realtime typing
+  opponentTyping: (number | null)[] | null;
+
+  // i18n
+  lang: 'en' | 'zh';
+
+  // ── local actions ──────────────────────────────────────────────────────────
+  setNickname: (n: string) => void;
+  inputDigit: (d: number) => void;
+  deleteDigit: () => void;
+  setCursor: (pos: number) => void;
+  setLang: (l: 'en' | 'zh') => void;
+
+  // ── socket actions ─────────────────────────────────────────────────────────
+  connect: () => void;
+  disconnect: () => void;
+  createRoom: (rules?: Partial<Rules>) => void;
+  joinRoom: (code: string) => void;
+  leaveRoom: () => void;
+  toggleReady: () => void;
+  updateRules: (rules: Partial<Rules>) => void;
+  submitSecret: () => void;
+  submitGuess: () => void;
+  requestRematch: () => void;
+
+  // ── dev only ───────────────────────────────────────────────────────────────
+  _devSetPhase: (phase: RoomPhase, opts?: { opponentDisconnected?: boolean }) => void;
+  _devLeave: () => void;
+}
+
 // ─── Dev mock helpers ─────────────────────────────────────────────────────────
 
 const MOCK_MY_ID = 'alice';
-
 const MOCK_RULES: Rules = { codeLength: 4, allowRepeats: false, totalRounds: 10 };
 
 function mockPlayer(id: string, nickname: string, isHost: boolean): Player {
@@ -86,51 +155,24 @@ const MOCK_GAME_END: GameEndPayload = {
   revealedSecrets: { alice: [4, 8, 1, 3], bob: [5, 2, 9, 0] },
 };
 
-// ─── Store ────────────────────────────────────────────────────────────────────
+// ─── Debounced typing emitter ─────────────────────────────────────────────────
 
-interface GameStore {
-  // connection
-  connected: boolean;
+let typingTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingTypingBuffer: (number | null)[] | null = null;
 
-  // identity
-  myId: string | null;
-  nickname: string;
+function emitTypingDebounced(buffer: (number | null)[]) {
+  pendingTypingBuffer = buffer;
+  if (typingTimer) return;
 
-  // room
-  roomState: ClientRoomState | null;
-  gameEndPayload: GameEndPayload | null;
-
-  // digit input (shared between SetSecret and Game screens)
-  inputBuffer: (number | null)[];
-  cursorPos: number;
-
-  // opponent realtime typing (populated via socket in M3)
-  opponentTyping: (number | null)[] | null;
-
-  // i18n
-  lang: 'en' | 'zh';
-
-  // ── local actions (work in M2) ──────────────────────────────────────────────
-  setNickname: (n: string) => void;
-  inputDigit: (d: number) => void;
-  deleteDigit: () => void;
-  setCursor: (pos: number) => void;
-  setLang: (l: 'en' | 'zh') => void;
-
-  // ── socket actions (stubs in M2 — implement in M3) ──────────────────────────
-  connect: () => void;
-  createRoom: (rules?: Partial<Rules>) => void;
-  joinRoom: (code: string) => void;
-  leaveRoom: () => void;
-  toggleReady: () => void;
-  submitSecret: () => void;
-  submitGuess: () => void;
-  requestRematch: () => void;
-
-  // ── dev only ─────────────────────────────────────────────────────────────────
-  _devSetPhase: (phase: RoomPhase, opts?: { opponentDisconnected?: boolean }) => void;
-  _devLeave: () => void;
+  typingTimer = setTimeout(() => {
+    if (pendingTypingBuffer && socket) {
+      socket.emit(C2S.TYPING_UPDATE, { buffer: pendingTypingBuffer });
+    }
+    typingTimer = null;
+  }, 50);
 }
+
+// ─── Store ────────────────────────────────────────────────────────────────────
 
 export const useGameStore = create<GameStore>((set, get) => ({
   connected: false,
@@ -143,7 +185,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
   opponentTyping: null,
   lang: 'en',
 
-  // ── local ────────────────────────────────────────────────────────────────────
+  // ── local ──────────────────────────────────────────────────────────────────
+
   setNickname: (n) => set({ nickname: n }),
 
   inputDigit: (d) => {
@@ -153,7 +196,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const next = [...inputBuffer];
     next[cursorPos] = d;
     set({ inputBuffer: next, cursorPos: Math.min(cursorPos + 1, codeLength) });
-    // TODO: M3 — debouncedEmit(C2S.TYPING_UPDATE, { buffer: next })
+    emitTypingDebounced(next);
   },
 
   deleteDigit: () => {
@@ -163,23 +206,117 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const target = cursorPos > 0 ? cursorPos - 1 : 0;
     next[target] = null;
     set({ inputBuffer: next, cursorPos: target });
-    // TODO: M3 — debouncedEmit(C2S.TYPING_UPDATE, { buffer: next })
+    emitTypingDebounced(next);
   },
 
   setCursor: (pos) => set({ cursorPos: pos }),
   setLang: (l) => set({ lang: l }),
 
-  // ── stubs (M3) ───────────────────────────────────────────────────────────────
-  connect: () => { /* TODO: M3 — init socket, wire events */ },
-  createRoom: () => { /* TODO: M3 — socket.emit(C2S.CREATE_ROOM, { nickname, rules }) */ },
-  joinRoom: () => { /* TODO: M3 — socket.emit(C2S.JOIN_ROOM, { nickname, code }) */ },
-  leaveRoom: () => { /* TODO: M3 — socket.emit(C2S.LEAVE_ROOM) */ },
-  toggleReady: () => { /* TODO: M3 — socket.emit(C2S.TOGGLE_READY) */ },
-  submitSecret: () => { /* TODO: M3 — socket.emit(C2S.SUBMIT_SECRET, { secret: inputBuffer }) */ },
-  submitGuess: () => { /* TODO: M3 — socket.emit(C2S.SUBMIT_GUESS, { guess: inputBuffer }) */ },
-  requestRematch: () => { /* TODO: M3 — socket.emit(C2S.REQUEST_REMATCH) */ },
+  // ── socket actions ─────────────────────────────────────────────────────────
 
-  // ── dev ──────────────────────────────────────────────────────────────────────
+  connect: () => {
+    const s = connectSocket();
+    if (!s) return;
+
+    s.on('connect', () => {
+      set({ connected: true, myId: s.id ?? null });
+    });
+
+    s.on('disconnect', () => {
+      set({ connected: false });
+    });
+
+    s.on('s:room_state', (state: ClientRoomState) => {
+      set({ roomState: state });
+    });
+
+    s.on('s:opponent_typing', ({ buffer }: { buffer: (number | null)[] }) => {
+      set({ opponentTyping: buffer });
+    });
+
+    s.on('s:reveal_guess', ({ result }: any) => {
+      console.log('[store] reveal_guess:', result);
+    });
+
+    s.on('s:game_end', (payload: GameEndPayload) => {
+      console.log('[store] game_end:', payload);
+      set({ gameEndPayload: payload });
+    });
+
+    s.on('s:error', ({ message }: { code: string; message: string }) => {
+      console.error('[store] error:', message);
+      // TODO: toast notification
+    });
+
+    s.on('s:kick', ({ reason }: { reason: string }) => {
+      console.warn('[store] kicked:', reason);
+      set({
+        roomState: null,
+        gameEndPayload: null,
+        inputBuffer: [null, null, null, null],
+        cursorPos: 0,
+      });
+    });
+  },
+
+  disconnect: () => {
+    disconnectSocket();
+    set({
+      connected: false,
+      myId: null,
+      roomState: null,
+      gameEndPayload: null,
+      inputBuffer: [null, null, null, null],
+      cursorPos: 0,
+    });
+  },
+
+  createRoom: (rules) => {
+    const { nickname } = get();
+    if (!nickname.trim()) return;
+    socket?.emit(C2S.CREATE_ROOM, { nickname: nickname.trim(), rules });
+  },
+
+  joinRoom: (code) => {
+    const { nickname } = get();
+    if (!nickname.trim() || !code.trim()) return;
+    socket?.emit(C2S.JOIN_ROOM, { nickname: nickname.trim(), code: code.trim() });
+  },
+
+  leaveRoom: () => {
+    socket?.emit(C2S.LEAVE_ROOM);
+    set({
+      roomState: null,
+      gameEndPayload: null,
+      inputBuffer: [null, null, null, null],
+      cursorPos: 0,
+    });
+  },
+
+  toggleReady: () => {
+    socket?.emit(C2S.TOGGLE_READY);
+  },
+
+  updateRules: (rules) => {
+    socket?.emit(C2S.UPDATE_RULES, { rules });
+  },
+
+  submitSecret: () => {
+    const { inputBuffer } = get();
+    socket?.emit(C2S.SUBMIT_SECRET, { secret: inputBuffer });
+  },
+
+  submitGuess: () => {
+    const { inputBuffer } = get();
+    socket?.emit(C2S.SUBMIT_GUESS, { guess: inputBuffer });
+  },
+
+  requestRematch: () => {
+    socket?.emit(C2S.REQUEST_REMATCH);
+  },
+
+  // ── dev ────────────────────────────────────────────────────────────────────
+
   _devSetPhase: (phase, opts = {}) => {
     const mockState = createMockRoomState(phase, opts);
     const codeLength = mockState.rules.codeLength;
