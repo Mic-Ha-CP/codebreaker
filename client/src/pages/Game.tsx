@@ -90,7 +90,8 @@ export default function Game() {
 
   const onDigit = (d: number) => {
     if (!yourTurn) return;
-    if (!rules?.allowRepeats && digits.includes(d)) return;
+    // Guesses may always repeat digits, regardless of rules.allowRepeats —
+    // that constraint only governs the secret code itself.
     inputDigit(d);
   };
 

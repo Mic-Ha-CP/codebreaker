@@ -24,8 +24,8 @@ const App = () => {
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <DevNav />
-      <div className="pt-10">
+      {import.meta.env.DEV && <DevNav />}
+      <div className={import.meta.env.DEV ? "pt-10" : undefined}>
         {!phase && <Landing />}
         {phase === 'lobby' && <Lobby />}
         {phase === 'setting_secret' && <SetSecret />}

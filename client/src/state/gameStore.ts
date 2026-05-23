@@ -173,6 +173,14 @@ function emitTypingDebounced(buffer: (number | null)[]) {
   }, 50);
 }
 
+// ─── Reveal delay (600ms after a guess) ───────────────────────────────────────
+// When `s:reveal_guess` arrives, we hold off applying the next `s:room_state`
+// briefly so the new guess line has time to "settle" visually before history
+// updates.
+export const REVEAL_DELAY_MS = 600;
+let revealHoldUntil = 0;
+let deferredRoomStateTimer: ReturnType<typeof setTimeout> | null = null;
+
 // ─── Store ────────────────────────────────────────────────────────────────────
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -227,7 +235,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({ connected: false });
     });
 
-    s.on('s:room_state', (state: ClientRoomState) => {
+    const applyRoomState = (state: ClientRoomState) => {
       const prev = get().roomState;
       const phaseChanged = prev?.phase !== state.phase;
 
@@ -247,14 +255,30 @@ export const useGameStore = create<GameStore>((set, get) => ({
           cursorPos: 0,
         } : {}),
       });
+    };
+
+    s.on('s:room_state', (state: ClientRoomState) => {
+      const remaining = revealHoldUntil - Date.now();
+      if (remaining > 0) {
+        // A reveal is in-flight — defer this state apply until the delay elapses
+        if (deferredRoomStateTimer) clearTimeout(deferredRoomStateTimer);
+        deferredRoomStateTimer = setTimeout(() => {
+          deferredRoomStateTimer = null;
+          applyRoomState(state);
+        }, remaining);
+      } else {
+        applyRoomState(state);
+      }
     });
 
     s.on('s:opponent_typing', ({ buffer }: { buffer: (number | null)[] }) => {
       set({ opponentTyping: buffer });
     });
 
-    s.on('s:reveal_guess', ({ result }: any) => {
-      console.log('[store] reveal_guess:', result);
+    s.on('s:reveal_guess', () => {
+      revealHoldUntil = Date.now() + REVEAL_DELAY_MS;
+      // Clear the opponent's typing buffer so it doesn't linger over the reveal
+      set({ opponentTyping: null });
     });
 
     s.on('s:game_end', (payload: GameEndPayload) => {
