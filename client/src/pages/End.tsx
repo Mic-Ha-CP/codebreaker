@@ -19,7 +19,7 @@ export default function End() {
 
   if (!roomState) return null;
 
-  const outcome = roomState.isDraw
+  const outcome = roomState.isDraw || roomState.winnerId === null
     ? 'draw'
     : roomState.winnerId === myId
     ? 'win'

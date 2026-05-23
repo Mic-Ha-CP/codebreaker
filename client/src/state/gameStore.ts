@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { io, Socket } from 'socket.io-client';
+import { toast } from 'sonner';
 import { C2S } from '../../../shared/events';
 import type {
   ClientRoomState,
@@ -227,7 +228,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
 
     s.on('s:room_state', (state: ClientRoomState) => {
-      set({ roomState: state });
+      const prev = get().roomState;
+      const phaseChanged = prev?.phase !== state.phase;
+
+      // Notify when opponent leaves in lobby
+      if (prev?.phase === 'lobby' && state.phase === 'lobby') {
+        const prevCount = prev.players.length;
+        const nextCount = state.players.length;
+        if (prevCount === 2 && nextCount === 1) {
+          toast.warning('Opponent left the room.');
+        }
+      }
+
+      set({
+        roomState: state,
+        ...(phaseChanged ? {
+          inputBuffer: Array<null>(state.rules.codeLength).fill(null),
+          cursorPos: 0,
+        } : {}),
+      });
     });
 
     s.on('s:opponent_typing', ({ buffer }: { buffer: (number | null)[] }) => {
@@ -244,12 +263,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
 
     s.on('s:error', ({ message }: { code: string; message: string }) => {
-      console.error('[store] error:', message);
-      // TODO: toast notification
+      toast.error(message);
     });
 
     s.on('s:kick', ({ reason }: { reason: string }) => {
-      console.warn('[store] kicked:', reason);
+      toast.warning(`Kicked: ${reason}`);
       set({
         roomState: null,
         gameEndPayload: null,
@@ -302,13 +320,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   submitSecret: () => {
-    const { inputBuffer } = get();
-    socket?.emit(C2S.SUBMIT_SECRET, { secret: inputBuffer });
+    const { inputBuffer, roomState } = get();
+    const codeLength = roomState?.rules.codeLength ?? 4;
+    socket?.emit(C2S.SUBMIT_SECRET, { secret: inputBuffer.slice(0, codeLength) });
   },
 
   submitGuess: () => {
-    const { inputBuffer } = get();
-    socket?.emit(C2S.SUBMIT_GUESS, { guess: inputBuffer });
+    const { inputBuffer, roomState } = get();
+    const codeLength = roomState?.rules.codeLength ?? 4;
+    socket?.emit(C2S.SUBMIT_GUESS, { guess: inputBuffer.slice(0, codeLength) });
+    set({ inputBuffer: Array<null>(codeLength).fill(null), cursorPos: 0 });
   },
 
   requestRematch: () => {

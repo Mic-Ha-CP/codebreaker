@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { DigitCells } from "@/components/codebreaker/DigitCells";
 import { NumberPad } from "@/components/codebreaker/NumberPad";
 import { TermButton } from "@/components/codebreaker/TermButton";
@@ -6,6 +5,7 @@ import { useGameStore } from "@/state/gameStore";
 
 export default function SetSecret() {
   const {
+    myId,
     roomState,
     inputBuffer,
     cursorPos,
@@ -16,12 +16,10 @@ export default function SetSecret() {
     leaveRoom,
   } = useGameStore();
 
-  // locked stays local in M2 since submitSecret is a stub and won't update roomState
-  const [locked, setLocked] = useState(false);
-
   const rules = roomState?.rules;
   const codeLength = rules?.codeLength ?? 4;
   const digits = inputBuffer.slice(0, codeLength);
+  const locked = roomState?.playerStates?.[myId ?? '']?.secret != null;
   const canSubmit = digits.every((d) => d !== null) && !locked;
 
   const onDigit = (d: number) => {
@@ -37,8 +35,7 @@ export default function SetSecret() {
 
   const onSubmit = () => {
     if (!canSubmit) return;
-    setLocked(true);
-    submitSecret(); // stub — M3: socket.emit(C2S.SUBMIT_SECRET, { secret: digits })
+    submitSecret();
   };
 
   return (

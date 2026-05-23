@@ -101,7 +101,7 @@ export default function Game() {
 
   const onSubmit = () => {
     if (!yourTurn || !digits.every((d) => d !== null)) return;
-    submitGuess(); // stub — M3: socket.emit(C2S.SUBMIT_GUESS, { guess: digits })
+    submitGuess();
   };
 
   const status = opponentDisconnected

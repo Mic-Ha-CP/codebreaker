@@ -249,13 +249,12 @@ export class Room {
     }
 
     // Advance turn
-    this.advanceTurn(playerId, opponentId);
+    const gameEnded = this.advanceTurn(playerId, opponentId);
     this.state.lastActivityAt = Date.now();
-    return { result, gameEnded: false };
+    return { result, gameEnded };
   }
 
-  private advanceTurn(currentPlayerId: PlayerId, opponentId: PlayerId): void {
-    // Check if both players have guessed this round
+  private advanceTurn(currentPlayerId: PlayerId, opponentId: PlayerId): boolean {
     const currentPlayer = this.state.playerStates[currentPlayerId];
     const opponent = this.state.playerStates[opponentId];
     const currentPlayerGuessedThisRound = currentPlayer?.history.some(
@@ -268,13 +267,14 @@ export class Room {
     if (currentPlayerGuessedThisRound && opponentGuessedThisRound) {
       this.state.currentRound++;
       if (this.state.currentRound > this.state.rules.totalRounds) {
-        // Rounds exhausted → draw
+        this.state.isDraw = true;
         this.endGame(null, 'rounds_exhausted');
-        return;
+        return true;
       }
     }
 
     this.state.currentTurnPlayerId = opponentId;
+    return false;
   }
 
   // ── Game end ───────────────────────────────────────────────────────────

@@ -1,15 +1,45 @@
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { TermButton } from "@/components/codebreaker/TermButton";
 import { useGameStore } from "@/state/gameStore";
+import type { Rules } from "../../../shared/types";
+
+type EditingField = keyof Pick<Rules, 'codeLength' | 'allowRepeats' | 'totalRounds'> | null;
 
 export default function Lobby() {
-  const { myId, roomState, toggleReady, leaveRoom } = useGameStore();
+  const { myId, roomState, toggleReady, leaveRoom, updateRules } = useGameStore();
+  const [editing, setEditing] = useState<EditingField>(null);
+  const [draft, setDraft] = useState<string>('');
 
   if (!roomState) return null;
 
   const { code, players, rules } = roomState;
   const me = players.find((p) => p.id === myId);
+  const isHost = me?.isHost ?? false;
   const allReady = players.length === 2 && players.every((p) => p.isReady);
+
+  const startEdit = (field: NonNullable<EditingField>) => {
+    setEditing(field);
+    setDraft(
+      field === 'allowRepeats'
+        ? String(rules.allowRepeats)
+        : String(rules[field])
+    );
+  };
+
+  const saveEdit = () => {
+    if (!editing) return;
+    if (editing === 'codeLength') updateRules({ codeLength: Number(draft) });
+    else if (editing === 'allowRepeats') updateRules({ allowRepeats: draft === 'true' });
+    else if (editing === 'totalRounds') updateRules({ totalRounds: Number(draft) });
+    setEditing(null);
+  };
+
+  const ruleRows: { field: NonNullable<EditingField>; label: string; display: string }[] = [
+    { field: 'codeLength', label: 'digits', display: String(rules.codeLength) },
+    { field: 'allowRepeats', label: 'repeats', display: rules.allowRepeats ? 'yes' : 'no' },
+    { field: 'totalRounds', label: 'rounds', display: String(rules.totalRounds) },
+  ];
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -43,21 +73,32 @@ export default function Lobby() {
           <section className="border border-border p-8">
             <h2 className="text-xs uppercase tracking-terminal text-muted mb-4">rules</h2>
             <dl className="flex flex-col gap-3">
-              {[
-                { k: 'digits', v: String(rules.codeLength) },
-                { k: 'repeats', v: rules.allowRepeats ? 'yes' : 'no' },
-                { k: 'rounds', v: String(rules.totalRounds) },
-              ].map((r) => (
+              {ruleRows.map(({ field, label, display }) => (
                 <div
-                  key={r.k}
+                  key={field}
                   className="flex items-center justify-between border-b border-border-soft pb-2"
                 >
-                  <div className="flex gap-6">
-                    <dt className="text-muted">{r.k}</dt>
-                    <dd>{r.v}</dd>
+                  <div className="flex gap-6 items-center font-mono">
+                    <dt className="text-muted">{label}</dt>
+                    {editing === field ? (
+                      <RuleEditor
+                        field={field}
+                        draft={draft}
+                        onChange={setDraft}
+                      />
+                    ) : (
+                      <dd>{display}</dd>
+                    )}
                   </div>
-                  {me?.isHost && (
-                    <TermButton variant="ghost">[ edit ]</TermButton>
+                  {isHost && (
+                    editing === field ? (
+                      <div className="flex gap-2">
+                        <TermButton variant="ghost" onClick={saveEdit}>[ save ]</TermButton>
+                        <TermButton variant="ghost" onClick={() => setEditing(null)}>[ x ]</TermButton>
+                      </div>
+                    ) : (
+                      <TermButton variant="ghost" onClick={() => startEdit(field)}>[ edit ]</TermButton>
+                    )
                   )}
                 </div>
               ))}
@@ -83,18 +124,52 @@ export default function Lobby() {
               ))}
             </ul>
             {allReady && (
-              <p className="mt-6 text-muted">&gt; starting in 5...</p>
+              <p className="mt-6 text-muted">&gt; all ready — starting...</p>
             )}
           </section>
-
-          <div className="flex justify-end">
-            <TermButton variant="filled" disabled={!allReady} onClick={() => {}}>
-              [ START NOW ]
-            </TermButton>
-          </div>
 
         </div>
       </main>
     </div>
+  );
+}
+
+function RuleEditor({
+  field,
+  draft,
+  onChange,
+}: {
+  field: NonNullable<EditingField>;
+  draft: string;
+  onChange: (v: string) => void;
+}) {
+  const selectClass =
+    "bg-transparent border border-border px-2 py-0.5 text-foreground focus:outline-none focus:border-foreground";
+
+  if (field === 'allowRepeats') {
+    return (
+      <select className={selectClass} value={draft} onChange={(e) => onChange(e.target.value)}>
+        <option value="false">no</option>
+        <option value="true">yes</option>
+      </select>
+    );
+  }
+
+  if (field === 'codeLength') {
+    return (
+      <select className={selectClass} value={draft} onChange={(e) => onChange(e.target.value)}>
+        {[3, 4, 5, 6].map((n) => (
+          <option key={n} value={n}>{n}</option>
+        ))}
+      </select>
+    );
+  }
+
+  return (
+    <select className={selectClass} value={draft} onChange={(e) => onChange(e.target.value)}>
+      {[5, 10, 15, 20, 30, 50].map((n) => (
+        <option key={n} value={n}>{n}</option>
+      ))}
+    </select>
   );
 }
