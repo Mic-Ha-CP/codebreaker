@@ -5,11 +5,53 @@ import { cn } from "@/lib/utils";
 import { useGameStore } from "@/state/gameStore";
 import type { GuessResult } from "../../../shared/types";
 
-function GuessLine({ row }: { row: GuessResult }) {
+type DigitMark = 'exact' | 'partial' | 'wrong';
+
+// Per-digit mark using the same exact-first, then partial (left-to-right
+// frequency-consuming) rule as server/src/game/feedback.ts.
+function markDigits(guess: number[], secret: number[]): DigitMark[] {
+  const marks: DigitMark[] = guess.map(() => 'wrong');
+  const consumed = new Array(secret.length).fill(false);
+
+  for (let i = 0; i < guess.length; i++) {
+    if (guess[i] === secret[i]) {
+      marks[i] = 'exact';
+      consumed[i] = true;
+    }
+  }
+  for (let i = 0; i < guess.length; i++) {
+    if (marks[i] === 'exact') continue;
+    for (let j = 0; j < secret.length; j++) {
+      if (!consumed[j] && secret[j] === guess[i]) {
+        marks[i] = 'partial';
+        consumed[j] = true;
+        break;
+      }
+    }
+  }
+  return marks;
+}
+
+const MARK_COLOR: Record<DigitMark, string> = {
+  exact: '#4ADE80',
+  partial: '#FBBF24',
+  wrong: '#ffffff',
+};
+
+function GuessLine({ row, marks }: { row: GuessResult; marks?: DigitMark[] }) {
   return (
     <div className="font-mono flex items-center gap-6 text-base">
       <span className="text-muted">  </span>
-      <span className="tracking-[0.3em]">{row.guess.join(" ")}</span>
+      <span className="tracking-[0.3em] flex gap-2">
+        {row.guess.map((d, i) => (
+          <span
+            key={i}
+            style={marks ? { color: MARK_COLOR[marks[i]] } : undefined}
+          >
+            {d}
+          </span>
+        ))}
+      </span>
       <span className="text-muted text-sm">
         E{row.exact}<span className="px-1">·</span>P{row.partial}
       </span>
@@ -74,6 +116,7 @@ export default function Game() {
   const opponentId = opponent?.id ?? '';
   const myHistory = (myId ? roomState?.playerStates[myId]?.history : undefined) ?? [];
   const oppHistory = (opponentId ? roomState?.playerStates[opponentId]?.history : undefined) ?? [];
+  const mySecret = (myId ? roomState?.playerStates[myId]?.secret : undefined) ?? null;
   const oppTyping = roomState?.opponentTypingBuffer ?? null;
   const opponentDisconnected = opponent
     ? !opponent.connected && opponent.disconnectedAt !== null
@@ -130,8 +173,14 @@ export default function Game() {
           <div>
             <h2 className="text-base font-semibold tracking-terminal">YOU</h2>
             <p className="text-xs text-muted tracking-terminal">// breaking opponent's code</p>
+            {mySecret && (
+              <p className="text-xs text-muted tracking-terminal mt-2">
+                your secret: <span className="tracking-[0.3em] ml-1">{mySecret.join(" ")}</span>
+              </p>
+            )}
           </div>
           <div className="flex flex-col gap-2">
+            {/* Guesser side — never highlight per-digit (player must work out which digits are correct). */}
             {myHistory.map((r, i) => <GuessLine key={i} row={r} />)}
             <PendingLine
               prefix=">"
@@ -148,7 +197,15 @@ export default function Game() {
             <p className="text-xs text-muted tracking-terminal">// breaking your code</p>
           </div>
           <div className="flex flex-col gap-2">
-            {oppHistory.map((r, i) => <GuessLine key={i} row={r} />)}
+            {/* Code-setter side — we know our own secret, so we can color each digit
+                green/amber/white. Compute marks client-side; no server change needed. */}
+            {oppHistory.map((r, i) => (
+              <GuessLine
+                key={i}
+                row={r}
+                marks={mySecret ? markDigits(r.guess, mySecret) : undefined}
+              />
+            ))}
             {oppTyping && (
               <PendingLine prefix=">" values={oppTyping} label="(typing...)" />
             )}
