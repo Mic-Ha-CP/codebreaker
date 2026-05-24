@@ -238,6 +238,31 @@ describe('Room — tiebreaker', () => {
     expect(room.state.winnerId).toBe(aId);
     expect(room.state.isDraw).toBe(false);
   });
+
+  // Second-guesser-wins: the opponent already had their shot this round and
+  // missed, so there's no fair-chance debt — the guesser wins outright.
+  it('second guesser correct → immediate win, no tiebreaker', () => {
+    const { room, aId, bId } = setupInProgressRoom({
+      secretA: [1, 2, 3, 4],
+      secretB: [5, 6, 7, 8],
+      firstTurn: 'A',
+    });
+    // A goes first and misses
+    const r1 = room.submitGuess(aId, [9, 9, 9, 9]);
+    if ('error' in r1) throw new Error('unexpected error');
+    expect(r1.gameEnded).toBe(false);
+    expect(room.state.pendingTiebreaker).toBeNull();
+    expect(room.state.currentTurnPlayerId).toBe(bId);
+
+    // B is the second guesser this round and nails it — should win outright
+    const r2 = room.submitGuess(bId, [1, 2, 3, 4]);
+    if ('error' in r2) throw new Error('unexpected error');
+    expect(r2.gameEnded).toBe(true);
+    expect(room.state.phase).toBe('ended');
+    expect(room.state.winnerId).toBe(bId);
+    expect(room.state.isDraw).toBe(false);
+    expect(room.state.pendingTiebreaker).toBeNull();
+  });
 });
 
 describe('Room — rounds exhaustion', () => {

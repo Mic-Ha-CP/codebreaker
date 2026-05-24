@@ -216,25 +216,28 @@ export class Room {
       if (this.state.pendingTiebreaker) {
         // Tiebreaker player guessed correctly → draw
         this.state.isDraw = true;
-        const endPayload = this.endGame(null, 'guessed');
+        this.endGame(null, 'guessed');
         return { result, gameEnded: true };
       }
 
-      const opponentState = this.state.playerStates[opponentId];
-      if (opponentState?.hasGuessedCorrectly) {
-        // Both guessed in same round → draw (safety check)
-        this.state.isDraw = true;
-        const endPayload = this.endGame(null, 'guessed');
+      // Tiebreaker is only owed when the opponent hasn't yet guessed this
+      // round. If the opponent already guessed (and missed) this round, the
+      // current player is the second guesser — they win outright; the
+      // opponent already had their fair shot.
+      const opponentGuessedThisRound = opponentState.history.some(
+        (h) => h.round === this.state.currentRound
+      );
+
+      if (opponentGuessedThisRound) {
+        this.endGame(playerId, 'guessed');
         return { result, gameEnded: true };
       }
 
-      // Trigger tiebreaker — opponent gets one more chance
+      // First guesser correct → opponent gets one more chance
       this.state.pendingTiebreaker = {
         triggeredByPlayerId: playerId,
         tiebreakerPlayerId: opponentId,
       };
-
-      // Advance turn to opponent for their tiebreaker guess
       this.state.currentTurnPlayerId = opponentId;
       this.state.lastActivityAt = Date.now();
       return { result, gameEnded: false };
