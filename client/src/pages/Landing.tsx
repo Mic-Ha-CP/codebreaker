@@ -51,7 +51,7 @@ export default function Landing() {
               <input
                 value={code}
                 onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 4))}
-                placeholder="X3K9"
+                placeholder="ENTER CODE"
                 maxLength={4}
                 className="w-full bg-transparent border border-border px-4 py-4 text-2xl tracking-[0.3em] text-center uppercase focus:outline-none focus:border-foreground transition-colors"
               />
