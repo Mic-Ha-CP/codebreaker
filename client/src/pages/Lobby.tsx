@@ -144,13 +144,14 @@ function RuleEditor({
   onChange: (v: string) => void;
 }) {
   const selectClass =
-    "bg-transparent border border-border px-2 py-0.5 text-foreground focus:outline-none focus:border-foreground";
+    "bg-black text-white border border-gray-700 px-2 py-0.5 focus:outline-none focus:border-foreground";
+  const optionClass = "bg-black text-white";
 
   if (field === 'allowRepeats') {
     return (
       <select className={selectClass} value={draft} onChange={(e) => onChange(e.target.value)}>
-        <option value="false">no</option>
-        <option value="true">yes</option>
+        <option className={optionClass} value="false">no</option>
+        <option className={optionClass} value="true">yes</option>
       </select>
     );
   }
@@ -159,7 +160,7 @@ function RuleEditor({
     return (
       <select className={selectClass} value={draft} onChange={(e) => onChange(e.target.value)}>
         {[3, 4, 5, 6].map((n) => (
-          <option key={n} value={n}>{n}</option>
+          <option className={optionClass} key={n} value={n}>{n}</option>
         ))}
       </select>
     );
@@ -168,7 +169,7 @@ function RuleEditor({
   return (
     <select className={selectClass} value={draft} onChange={(e) => onChange(e.target.value)}>
       {[5, 10, 15, 20, 30, 50].map((n) => (
-        <option key={n} value={n}>{n}</option>
+        <option className={optionClass} key={n} value={n}>{n}</option>
       ))}
     </select>
   );
