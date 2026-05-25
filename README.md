@@ -16,7 +16,7 @@ A 2-player realtime number codebreaking game.
 ├── client/     Vite + React + TS + Tailwind
 ├── server/     Node + Express + Socket.io + TS
 ├── shared/     Shared types and event constants
-└── docs/       Spec and planning docs (gitignored)
+└── docs/       (local notes, not in repo)
 ```
 
 ## Getting started
