@@ -22,7 +22,13 @@ function getSocket(): Socket | null {
 
 function connectSocket(): Socket {
   if (socket?.connected) return socket;
-  socket = io(SERVER_URL);
+  // reconnection:false — socket.io's default auto-reconnect assigns a NEW
+  // socket.id on reconnect, which would silently desync `myId` from the
+  // server's playerId (which is still the OLD socket.id). That caused panels
+  // to swap and input to lock. Per spec §8.2, MVP has no reconnection — a
+  // dropped socket means forfeit via the 30s timer. Real reconnection support
+  // is planned (planner.md P1).
+  socket = io(SERVER_URL, { reconnection: false });
   return socket;
 }
 

@@ -5,6 +5,7 @@ import type { ClientRoomState, Rules } from '../../../shared/types';
 type Handler = (...args: unknown[]) => void;
 const handlers = new Map<string, Handler>();
 const emitted: Array<{ event: string; payload: unknown }> = [];
+const ioCalls: Array<{ url: string; opts?: Record<string, unknown> }> = [];
 
 const fakeSocket = {
   id: 'mySocketId',
@@ -21,7 +22,10 @@ const fakeSocket = {
 };
 
 vi.mock('socket.io-client', () => ({
-  io: () => fakeSocket,
+  io: (url: string, opts?: Record<string, unknown>) => {
+    ioCalls.push({ url, opts });
+    return fakeSocket;
+  },
   Socket: class {},
 }));
 
@@ -61,6 +65,7 @@ function mockRoomState(rules: Rules, phase: ClientRoomState['phase']): ClientRoo
 beforeEach(() => {
   handlers.clear();
   emitted.length = 0;
+  ioCalls.length = 0;
   // Reset zustand store to its initial shape
   useGameStore.setState({
     connected: false,
@@ -260,6 +265,39 @@ describe('gameStore — reveal delay defers room_state', () => {
     // Flush any reveal-hold left over from earlier tests (module-level state).
     vi.advanceTimersByTime(700);
     handlers.get('s:room_state')!(mockRoomState(RULES_4, 'in_progress'));
+    expect(useGameStore.getState().roomState).not.toBeNull();
+  });
+});
+
+// Regression: socket.io's default auto-reconnect creates a new socket.id on
+// reconnect, which silently desyncs myId from the server's playerId (the
+// server still holds the OLD socket.id as the playerId). That caused panels
+// to swap and input to lock. Per spec §8.2, MVP has no reconnection — a
+// dropped socket means forfeit via the 30s timer.
+describe('gameStore — socket initialization', () => {
+  it('initializes the socket with reconnection disabled', () => {
+    useGameStore.getState().connect();
+    expect(ioCalls.length).toBeGreaterThan(0);
+    const last = ioCalls[ioCalls.length - 1];
+    expect(last.opts).toBeDefined();
+    expect(last.opts?.reconnection).toBe(false);
+  });
+
+  it('socket disconnect event flips connected:false but preserves roomState', () => {
+    useGameStore.getState().connect();
+    // Seed: we're in a room and connected (set directly to avoid coupling to
+    // the room_state apply path and any reveal-hold left from earlier tests).
+    useGameStore.setState({
+      connected: true,
+      roomState: mockRoomState(RULES_4, 'in_progress'),
+    });
+
+    // Socket drops
+    handlers.get('disconnect')!();
+
+    // connected flips, roomState preserved so the banner can show
+    // (App.tsx renders the banner when !connected && roomState !== null).
+    expect(useGameStore.getState().connected).toBe(false);
     expect(useGameStore.getState().roomState).not.toBeNull();
   });
 });
