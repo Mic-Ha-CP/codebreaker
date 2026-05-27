@@ -102,6 +102,7 @@ export default function Game() {
     cursorPos,
     inputDigit,
     deleteDigit,
+    setCursor,
     submitGuess,
     leaveRoom,
   } = useGameStore();
@@ -147,6 +148,38 @@ export default function Game() {
     if (!yourTurn || !digits.every((d) => d !== null)) return;
     submitGuess();
   };
+
+  // Hardware keyboard: digits, backspace, enter, arrows.
+  // Ignored when it's not your turn or the buffer is otherwise locked.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!yourTurn || opponentDisconnected) return;
+      // Don't hijack keys when the user is typing in an input/textarea
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      if (e.key >= '0' && e.key <= '9') {
+        e.preventDefault();
+        inputDigit(parseInt(e.key, 10));
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        deleteDigit();
+      } else if (e.key === 'Enter') {
+        if (digits.every((d) => d !== null)) {
+          e.preventDefault();
+          submitGuess();
+        }
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setCursor(Math.max(0, cursorPos - 1));
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setCursor(Math.min(codeLength - 1, cursorPos + 1));
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [yourTurn, opponentDisconnected, cursorPos, codeLength, digits, inputDigit, deleteDigit, setCursor, submitGuess]);
 
   const status = opponentDisconnected
     ? `opponent disconnected — ${disconnectSecs}s`

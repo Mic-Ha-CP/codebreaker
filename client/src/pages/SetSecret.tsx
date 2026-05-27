@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { DigitCells } from "@/components/codebreaker/DigitCells";
 import { NumberPad } from "@/components/codebreaker/NumberPad";
 import { TermButton } from "@/components/codebreaker/TermButton";
@@ -37,6 +38,37 @@ export default function SetSecret() {
     if (!canSubmit) return;
     submitSecret();
   };
+
+  // Hardware keyboard: same shape as Game.tsx, plus the SetSecret
+  // no-repeats guard. Disabled once the secret is locked in.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (locked) return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      if (e.key >= '0' && e.key <= '9') {
+        e.preventDefault();
+        onDigit(parseInt(e.key, 10));
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        deleteDigit();
+      } else if (e.key === 'Enter') {
+        if (canSubmit) {
+          e.preventDefault();
+          submitSecret();
+        }
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setCursor(Math.max(0, cursorPos - 1));
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setCursor(Math.min(codeLength - 1, cursorPos + 1));
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [locked, canSubmit, cursorPos, codeLength, digits, rules?.allowRepeats, inputDigit, deleteDigit, setCursor, submitSecret]);
 
   return (
     <div className="min-h-screen flex flex-col">
