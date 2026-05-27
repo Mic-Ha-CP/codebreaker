@@ -109,6 +109,7 @@ export default function Game() {
 
   const [showHelp, setShowHelp] = useState(false);
   const [disconnectSecs, setDisconnectSecs] = useState(30);
+  const [activeTab, setActiveTab] = useState<'you' | 'opponent'>('you');
 
   const rules = roomState?.rules;
   const codeLength = rules?.codeLength ?? 4;
@@ -131,29 +132,13 @@ export default function Game() {
   }, [opponentDisconnected, disconnectSecs]);
 
   const digits = inputBuffer.slice(0, codeLength);
-
-  const onDigit = (d: number) => {
-    if (!yourTurn) return;
-    // Guesses may always repeat digits, regardless of rules.allowRepeats —
-    // that constraint only governs the secret code itself.
-    inputDigit(d);
-  };
-
-  const onDelete = () => {
-    if (!yourTurn) return;
-    deleteDigit();
-  };
-
-  const onSubmit = () => {
-    if (!yourTurn || !digits.every((d) => d !== null)) return;
-    submitGuess();
-  };
+  const inputLocked = !yourTurn || opponentDisconnected;
 
   // Hardware keyboard: digits, backspace, enter, arrows.
   // Ignored when it's not your turn or the buffer is otherwise locked.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (!yourTurn || opponentDisconnected) return;
+      if (inputLocked) return;
       // Don't hijack keys when the user is typing in an input/textarea
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
@@ -179,7 +164,24 @@ export default function Game() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [yourTurn, opponentDisconnected, cursorPos, codeLength, digits, inputDigit, deleteDigit, setCursor, submitGuess]);
+  }, [inputLocked, cursorPos, codeLength, digits, inputDigit, deleteDigit, setCursor, submitGuess]);
+
+  const onDigit = (d: number) => {
+    if (!yourTurn) return;
+    // Guesses may always repeat digits, regardless of rules.allowRepeats —
+    // that constraint only governs the secret code itself.
+    inputDigit(d);
+  };
+
+  const onDelete = () => {
+    if (!yourTurn) return;
+    deleteDigit();
+  };
+
+  const onSubmit = () => {
+    if (!yourTurn || !digits.every((d) => d !== null)) return;
+    submitGuess();
+  };
 
   const status = opponentDisconnected
     ? `opponent disconnected — ${disconnectSecs}s`
@@ -188,9 +190,11 @@ export default function Game() {
     : "opponent's turn.";
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="flex items-center justify-between border-b border-border-soft px-6 py-3 text-xs tracking-terminal text-muted">
-        <div className="flex items-center gap-8">
+    // pb-[260px] on mobile reserves room for the fixed status+numberpad
+    // stack at the bottom of the viewport; desktop keeps natural flow.
+    <div className="min-h-screen flex flex-col pb-[260px] md:pb-0">
+      <header className="flex items-center justify-between border-b border-border-soft px-4 md:px-6 py-3 text-xs tracking-terminal text-muted">
+        <div className="flex items-center gap-3 md:gap-8 flex-wrap">
           <span className="text-foreground">ROOM #{roomState?.code}</span>
           <span>
             ROUND <span className="text-foreground">{roomState?.currentRound ?? 1}</span>{" "}
@@ -201,8 +205,45 @@ export default function Game() {
         <TermButton variant="ghost" onClick={leaveRoom}>[ LEAVE ]</TermButton>
       </header>
 
-      <div className="flex-1 grid grid-cols-2">
-        <section className="border-r border-border p-8 flex flex-col gap-6">
+      {/* Mobile-only: tab switcher between YOU / OPPONENT panels */}
+      <div className="md:hidden flex border-b border-border-soft text-xs tracking-terminal">
+        {(['you', 'opponent'] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={cn(
+              "flex-1 py-3 uppercase",
+              activeTab === tab
+                ? "text-foreground border-b-2 border-foreground"
+                : "text-muted"
+            )}
+          >
+            [ {tab} ]
+          </button>
+        ))}
+      </div>
+
+      {/* Mobile-only: persistent opponent typing strip — always visible
+          regardless of which tab is active, so the user never loses sight
+          of opponent activity. */}
+      <div className="md:hidden px-4 py-2 border-b border-border-soft font-mono text-xs text-muted flex items-center gap-2">
+        <span>OPP:</span>
+        {oppTyping ? (
+          <span className="tracking-[0.3em] text-foreground">
+            {oppTyping.map((v) => (v === null ? "_" : v)).join(" ")}
+          </span>
+        ) : (
+          <span className="italic">—</span>
+        )}
+      </div>
+
+      <div className="flex-1 flex flex-col md:grid md:grid-cols-2">
+        <section
+          className={cn(
+            "border-r border-border p-6 md:p-8 flex flex-col gap-6",
+            activeTab === 'opponent' && "hidden md:flex"
+          )}
+        >
           <div>
             <h2 className="text-base font-semibold tracking-terminal">YOU</h2>
             <p className="text-xs text-muted tracking-terminal">// breaking opponent's code</p>
@@ -224,7 +265,12 @@ export default function Game() {
           </div>
         </section>
 
-        <section className="p-8 flex flex-col gap-6">
+        <section
+          className={cn(
+            "p-6 md:p-8 flex flex-col gap-6",
+            activeTab === 'you' && "hidden md:flex"
+          )}
+        >
           <div>
             <h2 className="text-base font-semibold tracking-terminal">OPPONENT</h2>
             <p className="text-xs text-muted tracking-terminal">// breaking your code</p>
@@ -246,27 +292,32 @@ export default function Game() {
         </section>
       </div>
 
-      <div className="flex items-center justify-between border-t border-border-soft px-6 py-3 text-sm tracking-terminal">
-        <div>
-          <span className="text-muted">STATUS:</span> <span>{status}</span>
+      {/* Status + number pad stack — fixed to bottom on mobile so the iOS
+          on-screen keyboard (if anyone uses one) and small viewports don't
+          push the input controls off-screen. */}
+      <div className="fixed bottom-0 left-0 right-0 md:static bg-background z-30">
+        <div className="flex items-center justify-between border-t border-border-soft px-4 md:px-6 py-3 text-sm tracking-terminal">
+          <div>
+            <span className="text-muted">STATUS:</span> <span>{status}</span>
+          </div>
+          <button
+            onClick={() => setShowHelp((s) => !s)}
+            className="border border-border w-8 h-8 hover:bg-foreground hover:text-background transition-colors"
+          >
+            ?
+          </button>
         </div>
-        <button
-          onClick={() => setShowHelp((s) => !s)}
-          className="border border-border w-8 h-8 hover:bg-foreground hover:text-background transition-colors"
-        >
-          ?
-        </button>
-      </div>
 
-      <div className="border-t border-border-soft p-6">
-        <div className="max-w-[640px] mx-auto">
-          <NumberPad
-            onDigit={onDigit}
-            onDelete={onDelete}
-            onSubmit={onSubmit}
-            canSubmit={yourTurn && digits.every((d) => d !== null)}
-            disabled={!yourTurn || opponentDisconnected}
-          />
+        <div className="border-t border-border-soft p-4 md:p-6">
+          <div className="max-w-[640px] mx-auto">
+            <NumberPad
+              onDigit={onDigit}
+              onDelete={onDelete}
+              onSubmit={onSubmit}
+              canSubmit={yourTurn && digits.every((d) => d !== null)}
+              disabled={inputLocked}
+            />
+          </div>
         </div>
       </div>
 

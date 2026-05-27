@@ -80,15 +80,15 @@ export default function SetSecret() {
         <TermButton variant="secondary" onClick={leaveRoom}>[ LEAVE ]</TermButton>
       </header>
 
-      <main className="flex-1 grid grid-cols-[1fr_280px]">
-        <section className="flex flex-col items-center justify-center p-12 gap-10 border-r border-border-soft">
+      <main className="flex-1 flex flex-col md:grid md:grid-cols-[1fr_280px]">
+        <section className="flex flex-col items-center justify-center p-6 md:p-12 gap-8 md:gap-10 md:border-r md:border-border-soft">
           <DigitCells
             values={digits}
             cursor={locked ? null : cursorPos}
             size="lg"
             onCellClick={locked ? undefined : setCursor}
           />
-          <p className="text-sm text-muted tracking-terminal">
+          <p className="text-sm text-muted tracking-terminal text-center">
             Pick {codeLength} digits.{rules?.allowRepeats ? '' : ' Repeats not allowed.'}
           </p>
 
@@ -107,7 +107,7 @@ export default function SetSecret() {
           )}
         </section>
 
-        <aside className="p-8">
+        <aside className="p-6 md:p-8 border-t md:border-t-0 border-border-soft">
           <h3 className="text-xs uppercase tracking-terminal text-muted mb-4">opponent</h3>
           <p className="font-mono text-sm">&gt; setting code...</p>
         </aside>

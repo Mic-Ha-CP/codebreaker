@@ -45,8 +45,8 @@ export default function End() {
         </div>
       </header>
 
-      <div className="flex-1 grid grid-cols-2 relative">
-        <section className="border-r border-border p-8 flex flex-col gap-6">
+      <div className="flex-1 flex flex-col md:grid md:grid-cols-2 relative">
+        <section className="md:border-r md:border-border p-6 md:p-8 flex flex-col gap-6">
           <div>
             <h2 className="text-base font-semibold tracking-terminal">YOU</h2>
             <p className="text-xs text-muted tracking-terminal">// breaking opponent's code</p>
@@ -56,7 +56,7 @@ export default function End() {
           </div>
         </section>
 
-        <section className="p-8 flex flex-col gap-6">
+        <section className="border-t md:border-t-0 border-border p-6 md:p-8 flex flex-col gap-6">
           <div>
             <h2 className="text-base font-semibold tracking-terminal">OPPONENT</h2>
             <p className="text-xs text-muted tracking-terminal">// breaking your code</p>
@@ -66,9 +66,9 @@ export default function End() {
           </div>
         </section>
 
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="border border-border bg-background p-12 text-center pointer-events-auto min-w-[420px]">
-            <h1 className="text-5xl tracking-brand font-semibold mb-4">{headline}</h1>
+        <div className="fixed md:absolute inset-0 flex items-center justify-center pointer-events-none p-4">
+          <div className="border border-border bg-background p-6 md:p-12 text-center pointer-events-auto w-full max-w-[420px] md:min-w-[420px]">
+            <h1 className="text-4xl md:text-5xl tracking-brand font-semibold mb-4">{headline}</h1>
             {opponentSecret && (
               <p className="text-muted tracking-terminal mb-8">
                 opponent's code was{" "}
