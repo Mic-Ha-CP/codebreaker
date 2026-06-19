@@ -29,6 +29,20 @@ vi.mock('socket.io-client', () => ({
   Socket: class {},
 }));
 
+// jsdom in this project doesn't expose a usable localStorage — stub a
+// minimal Storage-compatible shim before the store module is imported.
+const lsStore = new Map<string, string>();
+const lsShim: Storage = {
+  get length() { return lsStore.size; },
+  clear: () => lsStore.clear(),
+  getItem: (k: string) => (lsStore.has(k) ? (lsStore.get(k) as string) : null),
+  setItem: (k: string, v: string) => { lsStore.set(k, String(v)); },
+  removeItem: (k: string) => { lsStore.delete(k); },
+  key: (i: number) => Array.from(lsStore.keys())[i] ?? null,
+};
+Object.defineProperty(globalThis, 'localStorage', { value: lsShim, writable: true });
+Object.defineProperty(window, 'localStorage', { value: lsShim, writable: true });
+
 vi.mock('sonner', () => ({
   toast: {
     error: vi.fn(),
@@ -66,6 +80,7 @@ beforeEach(() => {
   handlers.clear();
   emitted.length = 0;
   ioCalls.length = 0;
+  lsStore.clear();
   // Reset zustand store to its initial shape
   useGameStore.setState({
     connected: false,
@@ -269,35 +284,109 @@ describe('gameStore — reveal delay defers room_state', () => {
   });
 });
 
-// Regression: socket.io's default auto-reconnect creates a new socket.id on
-// reconnect, which silently desyncs myId from the server's playerId (the
-// server still holds the OLD socket.id as the playerId). That caused panels
-// to swap and input to lock. Per spec §8.2, MVP has no reconnection — a
-// dropped socket means forfeit via the 30s timer.
 describe('gameStore — socket initialization', () => {
-  it('initializes the socket with reconnection disabled', () => {
+  it('initializes the socket with reconnection enabled', () => {
     useGameStore.getState().connect();
     expect(ioCalls.length).toBeGreaterThan(0);
     const last = ioCalls[ioCalls.length - 1];
     expect(last.opts).toBeDefined();
-    expect(last.opts?.reconnection).toBe(false);
+    expect(last.opts?.reconnection).toBe(true);
   });
 
   it('socket disconnect event flips connected:false but preserves roomState', () => {
     useGameStore.getState().connect();
-    // Seed: we're in a room and connected (set directly to avoid coupling to
-    // the room_state apply path and any reveal-hold left from earlier tests).
     useGameStore.setState({
       connected: true,
       roomState: mockRoomState(RULES_4, 'in_progress'),
     });
 
-    // Socket drops
     handlers.get('disconnect')!();
 
-    // connected flips, roomState preserved so the banner can show
-    // (App.tsx renders the banner when !connected && roomState !== null).
     expect(useGameStore.getState().connected).toBe(false);
     expect(useGameStore.getState().roomState).not.toBeNull();
+  });
+});
+
+describe('gameStore — stable playerId + session persistence', () => {
+  it('generates and persists a playerId on first connect', () => {
+    expect(localStorage.getItem('cb_playerId')).toBeNull();
+    useGameStore.getState().connect();
+    const id = localStorage.getItem('cb_playerId');
+    expect(id).toBeTruthy();
+    expect(useGameStore.getState().myId).toBe(id);
+  });
+
+  it('reuses an existing playerId across connects', () => {
+    localStorage.setItem('cb_playerId', 'stable-id-123');
+    useGameStore.getState().connect();
+    expect(useGameStore.getState().myId).toBe('stable-id-123');
+  });
+
+  it('createRoom payload includes the stable playerId', () => {
+    localStorage.setItem('cb_playerId', 'pid-1');
+    useGameStore.setState({ nickname: 'alice' });
+    useGameStore.getState().connect();
+    useGameStore.getState().createRoom();
+    const ev = emitted.find((e) => e.event === 'c:create_room');
+    expect(ev?.payload).toMatchObject({ playerId: 'pid-1', nickname: 'alice' });
+  });
+
+  it('joinRoom payload includes the stable playerId', () => {
+    localStorage.setItem('cb_playerId', 'pid-2');
+    useGameStore.setState({ nickname: 'bob' });
+    useGameStore.getState().connect();
+    useGameStore.getState().joinRoom('ABCD');
+    const ev = emitted.find((e) => e.event === 'c:join_room');
+    expect(ev?.payload).toMatchObject({ playerId: 'pid-2', nickname: 'bob', code: 'ABCD' });
+  });
+
+  it('persists {roomCode, playerId} session on s:room_state', async () => {
+    localStorage.setItem('cb_playerId', 'pid-3');
+    useGameStore.getState().connect();
+    handlers.get('s:room_state')!(mockRoomState(RULES_4, 'lobby'));
+    // Flush any reveal-hold left over from a prior test in this file —
+    // the room_state apply (and the localStorage write) may have been deferred.
+    await new Promise((r) => setTimeout(r, 700));
+    const raw = localStorage.getItem('cb_session');
+    expect(raw).toBeTruthy();
+    expect(JSON.parse(raw!)).toEqual({ roomCode: 'TEST', playerId: 'pid-3' });
+  });
+
+  it('clears session on leaveRoom', () => {
+    localStorage.setItem('cb_session', JSON.stringify({ roomCode: 'TEST', playerId: 'x' }));
+    useGameStore.getState().connect();
+    useGameStore.getState().leaveRoom();
+    expect(localStorage.getItem('cb_session')).toBeNull();
+  });
+
+  it('clears session on s:kick', () => {
+    localStorage.setItem('cb_session', JSON.stringify({ roomCode: 'TEST', playerId: 'x' }));
+    useGameStore.getState().connect();
+    handlers.get('s:kick')!({ reason: 'test' });
+    expect(localStorage.getItem('cb_session')).toBeNull();
+  });
+
+  it('clears session on s:error with code reconnect_failed', () => {
+    localStorage.setItem('cb_session', JSON.stringify({ roomCode: 'TEST', playerId: 'x' }));
+    useGameStore.setState({ roomState: mockRoomState(RULES_4, 'in_progress') });
+    useGameStore.getState().connect();
+    handlers.get('s:error')!({ code: 'reconnect_failed', message: 'gone' });
+    expect(localStorage.getItem('cb_session')).toBeNull();
+    expect(useGameStore.getState().roomState).toBeNull();
+  });
+
+  it('emits c:reconnect on connect when a session is stored', () => {
+    localStorage.setItem('cb_playerId', 'pid-4');
+    localStorage.setItem('cb_session', JSON.stringify({ roomCode: 'WXYZ', playerId: 'pid-4' }));
+    useGameStore.getState().connect();
+    handlers.get('connect')!();
+    const ev = emitted.find((e) => e.event === 'c:reconnect');
+    expect(ev?.payload).toEqual({ roomCode: 'WXYZ', playerId: 'pid-4' });
+  });
+
+  it('does NOT emit c:reconnect on connect when no session is stored', () => {
+    useGameStore.getState().connect();
+    handlers.get('connect')!();
+    expect(emitted.find((e) => e.event === 'c:reconnect')).toBeUndefined();
   });
 });

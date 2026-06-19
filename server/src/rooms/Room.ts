@@ -22,6 +22,7 @@ const DEFAULT_RULES: Rules = {
 
 export class Room {
   state: RoomState;
+  private disconnectTimers = new Map<PlayerId, ReturnType<typeof setTimeout>>();
 
   constructor(code: RoomCode) {
     this.state = {
@@ -79,6 +80,7 @@ export class Room {
   removePlayer(playerId: PlayerId): void {
     this.state.players = this.state.players.filter((p) => p.id !== playerId);
     delete this.state.playerStates[playerId];
+    this.clearDisconnectTimer(playerId);
     this.state.lastActivityAt = Date.now();
 
     // Transfer host to remaining player
@@ -346,6 +348,20 @@ export class Room {
       player.connected = true;
       player.disconnectedAt = null;
       this.state.lastActivityAt = Date.now();
+    }
+    this.clearDisconnectTimer(playerId);
+  }
+
+  setDisconnectTimer(playerId: PlayerId, timer: ReturnType<typeof setTimeout>): void {
+    this.clearDisconnectTimer(playerId);
+    this.disconnectTimers.set(playerId, timer);
+  }
+
+  clearDisconnectTimer(playerId: PlayerId): void {
+    const t = this.disconnectTimers.get(playerId);
+    if (t) {
+      clearTimeout(t);
+      this.disconnectTimers.delete(playerId);
     }
   }
 

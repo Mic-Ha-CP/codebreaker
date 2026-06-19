@@ -359,3 +359,41 @@ describe('Room — disconnect markers', () => {
     expect(room.getPlayer(aId)?.disconnectedAt).toBeNull();
   });
 });
+
+describe('Room — disconnect timers', () => {
+  it('markReconnected cancels a pending disconnect timer', async () => {
+    const { room, aId } = setupInProgressRoom();
+    let fired = false;
+    const timer = setTimeout(() => { fired = true; }, 10);
+    room.setDisconnectTimer(aId, timer);
+
+    room.markReconnected(aId);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fired).toBe(false);
+  });
+
+  it('setDisconnectTimer replaces a previous timer for the same player', async () => {
+    const { room, aId } = setupInProgressRoom();
+    let firstFired = false;
+    let secondFired = false;
+    room.setDisconnectTimer(aId, setTimeout(() => { firstFired = true; }, 10));
+    room.setDisconnectTimer(aId, setTimeout(() => { secondFired = true; }, 10));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(firstFired).toBe(false);
+    expect(secondFired).toBe(true);
+  });
+
+  it('removePlayer clears any pending disconnect timer', async () => {
+    const { room, aId } = setupInProgressRoom();
+    let fired = false;
+    room.setDisconnectTimer(aId, setTimeout(() => { fired = true; }, 10));
+    room.removePlayer(aId);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fired).toBe(false);
+  });
+
+  it('clearDisconnectTimer is a no-op when no timer set', () => {
+    const { room, aId } = setupInProgressRoom();
+    expect(() => room.clearDisconnectTimer(aId)).not.toThrow();
+  });
+});

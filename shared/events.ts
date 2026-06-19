@@ -9,6 +9,7 @@ export const C2S = {
   TYPING_UPDATE: 'c:typing_update',
   SUBMIT_GUESS: 'c:submit_guess',
   REQUEST_REMATCH: 'c:request_rematch',
+  RECONNECT: 'c:reconnect',
 } as const;
 
 // Server → Client

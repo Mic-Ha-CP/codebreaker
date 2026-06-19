@@ -3,9 +3,11 @@ import { Server, Socket } from 'socket.io';
 import { C2S, S2C } from '../../shared/events.js';
 import { RoomManager } from './rooms/RoomManager.js';
 import { Room } from './rooms/Room.js';
-import type { GameEndPayload } from '../../shared/types.js';
+import type { PlayerId } from '../../shared/types.js';
 
 let roomManager: RoomManager;
+
+const DISCONNECT_FORFEIT_MS = 30_000;
 
 export function initSocket(server: HTTPServer, clientOrigin: string) {
   roomManager = new RoomManager();
@@ -14,18 +16,40 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
     cors: { origin: clientOrigin, credentials: true },
   });
 
+  // Track current socket per playerId so we can: (a) route emits via
+  // io.to(playerId) (each socket joins its own playerId room on
+  // create/join/reconnect) and (b) detect a stale-but-still-connected
+  // socket on reconnect and kick it.
+  const socketIdToPlayerId = new Map<string, PlayerId>();
+  const playerIdToSocketId = new Map<PlayerId, string>();
+
+  function bindPlayer(socket: Socket, playerId: PlayerId): void {
+    socketIdToPlayerId.set(socket.id, playerId);
+    playerIdToSocketId.set(playerId, socket.id);
+    socket.join(playerId);
+  }
+
+  function unbindSocket(socketId: string): PlayerId | undefined {
+    const playerId = socketIdToPlayerId.get(socketId);
+    socketIdToPlayerId.delete(socketId);
+    if (playerId && playerIdToSocketId.get(playerId) === socketId) {
+      playerIdToSocketId.delete(playerId);
+    }
+    return playerId;
+  }
+
   io.on('connection', (socket: Socket) => {
     console.log(`[socket] connected: ${socket.id}`);
 
     // ── Create room ──────────────────────────────────────────────────────
-    socket.on(C2S.CREATE_ROOM, (payload: { nickname: string; rules?: Partial<import('../../shared/types.js').Rules> }) => {
-      const { nickname, rules } = payload;
-      if (!nickname || nickname.trim().length === 0) {
+    socket.on(C2S.CREATE_ROOM, (payload: { playerId: string; nickname: string; rules?: Partial<import('../../shared/types.js').Rules> }) => {
+      const { playerId, nickname, rules } = payload;
+      if (!playerId || !nickname || nickname.trim().length === 0) {
         socket.emit(S2C.ERROR, { code: 'invalid_input', message: 'Nickname is required' });
         return;
       }
 
-      const result = roomManager.createRoom(socket.id, nickname.trim());
+      const result = roomManager.createRoom(playerId, nickname.trim());
       if ('error' in result) {
         socket.emit(S2C.ERROR, { code: result.error, message: getErrorMessage(result.error) });
         return;
@@ -33,16 +57,21 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
 
       const room = result;
       socket.join(room.state.code);
+      bindPlayer(socket, playerId);
 
-      const clientState = room.toClientState(socket.id);
+      if (rules) {
+        room.updateRules(playerId, rules);
+      }
+
+      const clientState = room.toClientState(playerId);
       socket.emit(S2C.ROOM_STATE, clientState);
-      console.log(`[room] ${room.state.code} created by ${nickname}`);
+      console.log(`[room] ${room.state.code} created by ${nickname} (${playerId})`);
     });
 
     // ── Join room ────────────────────────────────────────────────────────
-    socket.on(C2S.JOIN_ROOM, (payload: { nickname: string; code: string }) => {
-      const { nickname, code } = payload;
-      if (!nickname || nickname.trim().length === 0) {
+    socket.on(C2S.JOIN_ROOM, (payload: { playerId: string; nickname: string; code: string }) => {
+      const { playerId, nickname, code } = payload;
+      if (!playerId || !nickname || nickname.trim().length === 0) {
         socket.emit(S2C.ERROR, { code: 'invalid_input', message: 'Nickname is required' });
         return;
       }
@@ -59,33 +88,84 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
         return;
       }
 
-      const result = room.addPlayer(socket.id, nickname.trim());
+      const result = room.addPlayer(playerId, nickname.trim());
       if ('error' in result) {
         socket.emit(S2C.ERROR, { code: result.error, message: getErrorMessage(result.error) });
         return;
       }
 
       socket.join(room.state.code);
+      bindPlayer(socket, playerId);
 
-      // Broadcast updated state to all players in the room
       broadcastRoomState(io, room);
-      console.log(`[room] ${socket.id} (${nickname}) joined ${room.state.code}`);
+      console.log(`[room] ${playerId} (${nickname}) joined ${room.state.code}`);
+    });
+
+    // ── Reconnect ────────────────────────────────────────────────────────
+    socket.on(C2S.RECONNECT, (payload: { playerId: string; roomCode: string }) => {
+      const { playerId, roomCode } = payload ?? {};
+      if (!playerId || !roomCode) {
+        socket.emit(S2C.ERROR, { code: 'reconnect_failed', message: 'Reconnect payload invalid' });
+        return;
+      }
+
+      const room = roomManager.getRoom(roomCode.toUpperCase().trim());
+      if (!room || !room.getPlayer(playerId)) {
+        socket.emit(S2C.ERROR, { code: 'reconnect_failed', message: 'Session expired' });
+        return;
+      }
+
+      // Kick any stale-but-connected socket holding the slot (two-tab guard).
+      const existingSocketId = playerIdToSocketId.get(playerId);
+      if (existingSocketId && existingSocketId !== socket.id) {
+        const existing = io.sockets.sockets.get(existingSocketId);
+        if (existing?.connected) {
+          existing.emit(S2C.KICK, { reason: 'Reconnected from another window' });
+          existing.disconnect(true);
+        }
+        unbindSocket(existingSocketId);
+      }
+
+      socket.join(room.state.code);
+      bindPlayer(socket, playerId);
+      room.markReconnected(playerId);
+
+      socket.emit(S2C.ROOM_STATE, room.toClientState(playerId));
+      broadcastRoomState(io, room);
+      console.log(`[room] ${playerId} reconnected to ${room.state.code}`);
     });
 
     // ── Leave room ───────────────────────────────────────────────────────
     socket.on(C2S.LEAVE_ROOM, () => {
-      handleLeaveRoom(io, socket);
-    });
-
-    // ── Toggle ready ─────────────────────────────────────────────────────
-    socket.on(C2S.TOGGLE_READY, () => {
-      const room = roomManager.getRoomByPlayer(socket.id);
-      if (!room) {
+      const playerId = socketIdToPlayerId.get(socket.id);
+      const room = playerId ? roomManager.getRoomByPlayer(playerId) : null;
+      if (!playerId || !room) {
         socket.emit(S2C.ERROR, { code: 'not_in_room', message: 'You are not in a room' });
         return;
       }
 
-      const result = room.toggleReady(socket.id);
+      socket.leave(room.state.code);
+      socket.leave(playerId);
+      unbindSocket(socket.id);
+      room.removePlayer(playerId);
+
+      if (room.state.players.length === 0) {
+        roomManager.removeRoom(room.state.code);
+      } else {
+        broadcastRoomState(io, room);
+      }
+    });
+
+    // ── Toggle ready ─────────────────────────────────────────────────────
+    socket.on(C2S.TOGGLE_READY, () => {
+      const playerId = socketIdToPlayerId.get(socket.id);
+      const room = playerId ? roomManager.getRoomByPlayer(playerId) : null;
+      if (!playerId || !room) {
+        socket.emit(S2C.ERROR, { code: 'not_in_room', message: 'You are not in a room' });
+        return;
+      }
+
+      const result = room.toggleReady(playerId);
       if ('error' in result) {
         socket.emit(S2C.ERROR, { code: result.error, message: getErrorMessage(result.error) });
         return;
@@ -96,13 +176,14 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
 
     // ── Update rules ─────────────────────────────────────────────────────
     socket.on(C2S.UPDATE_RULES, (payload: { rules: Partial<import('../../shared/types.js').Rules> }) => {
-      const room = roomManager.getRoomByPlayer(socket.id);
-      if (!room) {
+      const playerId = socketIdToPlayerId.get(socket.id);
+      const room = playerId ? roomManager.getRoomByPlayer(playerId) : null;
+      if (!playerId || !room) {
         socket.emit(S2C.ERROR, { code: 'not_in_room', message: 'You are not in a room' });
         return;
       }
 
-      const result = room.updateRules(socket.id, payload.rules);
+      const result = room.updateRules(playerId, payload.rules);
       if ('error' in result) {
         socket.emit(S2C.ERROR, { code: result.error, message: getErrorMessage(result.error) });
         return;
@@ -113,13 +194,14 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
 
     // ── Submit secret ────────────────────────────────────────────────────
     socket.on(C2S.SUBMIT_SECRET, (payload: { secret: number[] }) => {
-      const room = roomManager.getRoomByPlayer(socket.id);
-      if (!room) {
+      const playerId = socketIdToPlayerId.get(socket.id);
+      const room = playerId ? roomManager.getRoomByPlayer(playerId) : null;
+      if (!playerId || !room) {
         socket.emit(S2C.ERROR, { code: 'not_in_room', message: 'You are not in a room' });
         return;
       }
 
-      const result = room.submitSecret(socket.id, payload.secret);
+      const result = room.submitSecret(playerId, payload.secret);
       if ('error' in result) {
         socket.emit(S2C.ERROR, { code: result.error, message: getErrorMessage(result.error) });
         return;
@@ -130,11 +212,11 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
 
     // ── Typing update ───────────────────────────────────────────────────
     socket.on(C2S.TYPING_UPDATE, (payload: { buffer: (number | null)[] }) => {
-      const room = roomManager.getRoomByPlayer(socket.id);
-      if (!room) return;
+      const playerId = socketIdToPlayerId.get(socket.id);
+      const room = playerId ? roomManager.getRoomByPlayer(playerId) : null;
+      if (!playerId || !room) return;
 
-      // Only forward to opponent
-      const opponentId = room.getOpponentId(socket.id);
+      const opponentId = room.getOpponentId(playerId);
       if (opponentId) {
         io.to(opponentId).emit(S2C.OPPONENT_TYPING, { buffer: payload.buffer });
       }
@@ -142,20 +224,20 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
 
     // ── Submit guess ─────────────────────────────────────────────────────
     socket.on(C2S.SUBMIT_GUESS, (payload: { guess: number[] }) => {
-      const room = roomManager.getRoomByPlayer(socket.id);
-      if (!room) {
+      const playerId = socketIdToPlayerId.get(socket.id);
+      const room = playerId ? roomManager.getRoomByPlayer(playerId) : null;
+      if (!playerId || !room) {
         socket.emit(S2C.ERROR, { code: 'not_in_room', message: 'You are not in a room' });
         return;
       }
 
-      const result = room.submitGuess(socket.id, payload.guess);
+      const result = room.submitGuess(playerId, payload.guess);
       if ('error' in result) {
         socket.emit(S2C.ERROR, { code: result.error, message: getErrorMessage(result.error) });
         return;
       }
 
       if (result.gameEnded) {
-        // Game ended — broadcast game_end + final state
         const revealedSecrets: Record<string, number[]> = {};
         for (const player of room.state.players) {
           const pState = room.state.playerStates[player.id];
@@ -173,9 +255,8 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
 
         io.to(room.state.code).emit(S2C.REVEAL_GUESS, { result: result.result });
         io.to(room.state.code).emit(S2C.GAME_END, endPayload);
-        io.to(room.state.code).emit(S2C.ROOM_STATE, room.toClientState(socket.id));
+        io.to(room.state.code).emit(S2C.ROOM_STATE, room.toClientState(playerId));
       } else {
-        // Normal round progression — broadcast reveal + state
         io.to(room.state.code).emit(S2C.REVEAL_GUESS, { result: result.result });
         broadcastRoomState(io, room);
       }
@@ -183,8 +264,9 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
 
     // ── Request rematch ──────────────────────────────────────────────────
     socket.on(C2S.REQUEST_REMATCH, () => {
-      const room = roomManager.getRoomByPlayer(socket.id);
-      if (!room) {
+      const playerId = socketIdToPlayerId.get(socket.id);
+      const room = playerId ? roomManager.getRoomByPlayer(playerId) : null;
+      if (!playerId || !room) {
         socket.emit(S2C.ERROR, { code: 'not_in_room', message: 'You are not in a room' });
         return;
       }
@@ -201,15 +283,27 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
     // ── Disconnect ───────────────────────────────────────────────────────
     socket.on('disconnect', (reason: string) => {
       console.log(`[socket] disconnected: ${socket.id} (${reason})`);
-      const room = roomManager.getRoomByPlayer(socket.id);
+
+      const playerId = socketIdToPlayerId.get(socket.id);
+      if (!playerId) return;
+
+      // Only release the mapping if this socket is the current owner —
+      // a fresh c:reconnect on a new socket may have already overwritten
+      // the entry, in which case we don't want to wipe the new socket's
+      // binding.
+      if (playerIdToSocketId.get(playerId) === socket.id) {
+        playerIdToSocketId.delete(playerId);
+      }
+      socketIdToPlayerId.delete(socket.id);
+
+      const room = roomManager.getRoomByPlayer(playerId);
       if (!room) return;
 
-      const player = room.getPlayer(socket.id);
+      const player = room.getPlayer(playerId);
       if (!player) return;
 
       if (room.state.phase === 'lobby') {
-        // Just remove from lobby
-        room.removePlayer(socket.id);
+        room.removePlayer(playerId);
         if (room.state.players.length === 0) {
           roomManager.removeRoom(room.state.code);
         } else {
@@ -218,22 +312,24 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
         return;
       }
 
-      // In-game disconnect: mark disconnected, start 30s timer
-      room.markDisconnected(socket.id);
+      // In-game disconnect: mark + start a cancellable 30s forfeit timer.
+      room.markDisconnected(playerId);
       broadcastRoomState(io, room);
 
-      // 30s timeout for reconnect
-      setTimeout(() => {
-        const stillDisconnected = room.getPlayer(socket.id)?.connected === false;
+      const timer = setTimeout(() => {
+        const stillDisconnected = room.getPlayer(playerId)?.connected === false;
         if (stillDisconnected && room.state.phase !== 'ended') {
-          const opponentId = room.getOpponentId(socket.id);
+          const opponentId = room.getOpponentId(playerId);
           if (opponentId) {
             const endPayload = room.endGame(opponentId, 'disconnect');
             io.to(room.state.code).emit(S2C.GAME_END, endPayload);
             io.to(room.state.code).emit(S2C.ROOM_STATE, room.toClientState(opponentId));
           }
         }
-      }, 30_000);
+        room.clearDisconnectTimer(playerId);
+      }, DISCONNECT_FORFEIT_MS);
+
+      room.setDisconnectTimer(playerId, timer);
     });
   });
 
@@ -246,23 +342,6 @@ function broadcastRoomState(io: Server, room: Room): void {
   for (const player of room.state.players) {
     const clientState = room.toClientState(player.id);
     io.to(player.id).emit(S2C.ROOM_STATE, clientState);
-  }
-}
-
-function handleLeaveRoom(io: Server, socket: Socket): void {
-  const room = roomManager.getRoomByPlayer(socket.id);
-  if (!room) {
-    socket.emit(S2C.ERROR, { code: 'not_in_room', message: 'You are not in a room' });
-    return;
-  }
-
-  socket.leave(room.state.code);
-  room.removePlayer(socket.id);
-
-  if (room.state.players.length === 0) {
-    roomManager.removeRoom(room.state.code);
-  } else {
-    broadcastRoomState(io, room);
   }
 }
 
@@ -288,6 +367,7 @@ function getErrorMessage(code: string): string {
     invalid_rounds: 'Total rounds must be between 5 and 50',
     not_in_room: 'You are not in a room',
     game_in_progress: 'Game already in progress',
+    reconnect_failed: 'Could not reconnect to your previous game',
   };
   return messages[code] || 'An error occurred';
 }

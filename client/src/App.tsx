@@ -17,14 +17,31 @@ const App = () => {
   const inRoom = useGameStore((s) => s.roomState !== null);
   const connect = useGameStore((s) => s.connect);
   const disconnect = useGameStore((s) => s.disconnect);
+  const forceReconnect = useGameStore((s) => s.forceReconnect);
 
   useEffect(() => {
     connect();
     return () => disconnect();
   }, []);
 
-  // Auto-reconnect is disabled (see gameStore connectSocket). If the socket
-  // drops while in a room, the user has no path back — show a blocking banner.
+  // Mobile WebViews (Discord in particular) freeze/evict idle pages — the
+  // socket can die silently. When the tab returns to foreground, nudge the
+  // socket; if it's down, socket.io will run its reconnect attempts, then
+  // c:reconnect re-binds us to the existing player slot server-side.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') forceReconnect();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('pageshow', onVisible);
+    };
+  }, [forceReconnect]);
+
+  // Auto-reconnect is on, so brief drops self-heal. Banner stays as a
+  // fallback when reconnection attempts have exhausted.
   const showConnectionLost = !connected && inRoom;
 
   return (

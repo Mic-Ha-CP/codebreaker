@@ -13,22 +13,56 @@ import type {
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
 
+const PLAYER_ID_KEY = 'cb_playerId';
+const SESSION_KEY = 'cb_session';
+
+// Stable client-generated identity. Decouples player identity from
+// socket.id so reconnects re-bind to the same player slot server-side.
+function getOrCreatePlayerId(): string {
+  let id = localStorage.getItem(PLAYER_ID_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(PLAYER_ID_KEY, id);
+  }
+  return id;
+}
+
+interface StoredSession {
+  roomCode: string;
+  playerId: string;
+}
+
+function getStoredSession(): StoredSession | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? (JSON.parse(raw) as StoredSession) : null;
+  } catch {
+    return null;
+  }
+}
+
+function setStoredSession(session: StoredSession): void {
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+}
+
+function clearStoredSession(): void {
+  localStorage.removeItem(SESSION_KEY);
+}
+
 // Module-level socket reference — initialized once
 let socket: Socket | null = null;
 
-function getSocket(): Socket | null {
-  return socket;
-}
-
 function connectSocket(): Socket {
   if (socket?.connected) return socket;
-  // reconnection:false — socket.io's default auto-reconnect assigns a NEW
-  // socket.id on reconnect, which would silently desync `myId` from the
-  // server's playerId (which is still the OLD socket.id). That caused panels
-  // to swap and input to lock. Per spec §8.2, MVP has no reconnection — a
-  // dropped socket means forfeit via the 30s timer. Real reconnection support
-  // is planned (planner.md P1).
-  socket = io(SERVER_URL, { reconnection: false });
+  // Auto-reconnect is on. A successful low-level reconnect emits 'connect'
+  // again; the handler then sends c:reconnect with our stable playerId so
+  // the server re-binds the new socket to our existing player slot.
+  socket = io(SERVER_URL, {
+    reconnection: true,
+    reconnectionAttempts: 10,
+    reconnectionDelay: 500,
+    reconnectionDelayMax: 5000,
+  });
   return socket;
 }
 
@@ -71,6 +105,7 @@ interface GameStore {
   // ── socket actions ─────────────────────────────────────────────────────────
   connect: () => void;
   disconnect: () => void;
+  forceReconnect: () => void;
   createRoom: (rules?: Partial<Rules>) => void;
   joinRoom: (code: string) => void;
   leaveRoom: () => void;
@@ -233,8 +268,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const s = connectSocket();
     if (!s) return;
 
+    const playerId = getOrCreatePlayerId();
+    set({ myId: playerId });
+
     s.on('connect', () => {
-      set({ connected: true, myId: s.id ?? null });
+      set({ connected: true, myId: playerId });
+      // If we already have a session (mid-game disconnect, then auto-reconnect
+      // fires, OR a tab refresh), re-bind to the existing player slot.
+      const session = getStoredSession();
+      if (session) {
+        s.emit(C2S.RECONNECT, session);
+      }
     });
 
     s.on('disconnect', () => {
@@ -253,6 +297,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
           toast.warning('Opponent left the room.');
         }
       }
+
+      // Persist session on every room_state so a fresh page load can recover.
+      setStoredSession({ roomCode: state.code, playerId });
 
       set({
         roomState: state,
@@ -292,12 +339,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({ gameEndPayload: payload });
     });
 
-    s.on('s:error', ({ message }: { code: string; message: string }) => {
+    s.on('s:error', ({ code, message }: { code: string; message: string }) => {
+      // If the server can't honour our stored session (room gone, slot
+      // freed, etc.) wipe it so we don't keep retrying every reconnect.
+      if (code === 'reconnect_failed') {
+        clearStoredSession();
+        set({
+          roomState: null,
+          gameEndPayload: null,
+          inputBuffer: [null, null, null, null],
+          cursorPos: 0,
+        });
+        return;
+      }
       toast.error(message);
     });
 
     s.on('s:kick', ({ reason }: { reason: string }) => {
       toast.warning(`Kicked: ${reason}`);
+      clearStoredSession();
       set({
         roomState: null,
         gameEndPayload: null,
@@ -319,20 +379,30 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
   },
 
+  forceReconnect: () => {
+    // Used by the visibility handler when we suspect the WebView/tab was
+    // frozen and the socket silently died. Cheap when already connected.
+    if (!socket) return;
+    if (!socket.connected) socket.connect();
+  },
+
   createRoom: (rules) => {
     const { nickname } = get();
     if (!nickname.trim()) return;
-    socket?.emit(C2S.CREATE_ROOM, { nickname: nickname.trim(), rules });
+    const playerId = getOrCreatePlayerId();
+    socket?.emit(C2S.CREATE_ROOM, { playerId, nickname: nickname.trim(), rules });
   },
 
   joinRoom: (code) => {
     const { nickname } = get();
     if (!nickname.trim() || !code.trim()) return;
-    socket?.emit(C2S.JOIN_ROOM, { nickname: nickname.trim(), code: code.trim() });
+    const playerId = getOrCreatePlayerId();
+    socket?.emit(C2S.JOIN_ROOM, { playerId, nickname: nickname.trim(), code: code.trim() });
   },
 
   leaveRoom: () => {
     socket?.emit(C2S.LEAVE_ROOM);
+    clearStoredSession();
     set({
       roomState: null,
       gameEndPayload: null,
