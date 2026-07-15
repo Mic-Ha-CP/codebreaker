@@ -2,12 +2,14 @@
 
 A 2-player realtime number codebreaking game.
 
-## Status: In progress
+**▶ Play it live: <https://codebreaker-seven.vercel.app/>** — client on Vercel, server on Render.
+
+<!-- TODO(owner): add a short GIF of a round being played (already tracked in docs/planner.md) -->
 
 ## Stack
 
 - **Client**: React + TypeScript + Tailwind + Vite (Vercel)
-- **Server**: Node.js + Express + Socket.io (Railway)
+- **Server**: Node.js + Express + Socket.io (Render)
 - **Shared**: TypeScript types
 
 ## Structure
@@ -33,7 +35,3 @@ cd server && npm install && npm run dev
 
 Two players. One sets a secret code, the other guesses it — and vice versa.
 Get feedback after each guess: E (exact) = right digit, right position. P (partial) = right digit, wrong position.
-
-## What I learned
-
-<!-- fill in after completion -->
