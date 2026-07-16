@@ -124,6 +124,15 @@ export default function Game() {
     ? !opponent.connected && opponent.disconnectedAt !== null
     : false;
 
+  // The bot has no keyboard, so there is nothing to mirror — we show that it is
+  // working instead of faking keystrokes. Driven purely off whose turn it is.
+  const botDifficulty = roomState?.botDifficulty ?? null;
+  const opponentIsBot = opponent?.isBot === true;
+  const botThinking = opponentIsBot && !yourTurn && roomState?.phase === 'in_progress';
+  const opponentLabel = opponentIsBot && botDifficulty
+    ? `OPPONENT — CPU · ${botDifficulty.toUpperCase()}`
+    : 'OPPONENT';
+
   useEffect(() => {
     if (!opponentDisconnected) { setDisconnectSecs(30); return; }
     if (disconnectSecs <= 0) return;
@@ -187,6 +196,8 @@ export default function Game() {
     ? `opponent disconnected — ${disconnectSecs}s`
     : yourTurn
     ? "your turn. enter your guess."
+    : botThinking
+    ? "computing..."
     : "opponent's turn.";
 
   return (
@@ -228,7 +239,9 @@ export default function Game() {
           of opponent activity. */}
       <div className="md:hidden px-4 py-2 border-b border-border-soft font-mono text-xs text-muted flex items-center gap-2">
         <span>OPP:</span>
-        {oppTyping ? (
+        {botThinking ? (
+          <span className="text-foreground">computing<span className="animate-pulse">_</span></span>
+        ) : oppTyping ? (
           <span className="tracking-[0.3em] text-foreground">
             {oppTyping.map((v) => (v === null ? "_" : v)).join(" ")}
           </span>
@@ -272,8 +285,14 @@ export default function Game() {
           )}
         >
           <div>
-            <h2 className="text-base font-semibold tracking-terminal">OPPONENT</h2>
-            <p className="text-xs text-muted tracking-terminal">// breaking your code</p>
+            <h2 className="text-base font-semibold tracking-terminal">{opponentLabel}</h2>
+            <p className="text-xs text-muted tracking-terminal">
+              {botThinking ? (
+                <>// computing<span className="animate-pulse">_</span></>
+              ) : (
+                <>// breaking your code</>
+              )}
+            </p>
           </div>
           <div className="flex flex-col gap-2">
             {/* Code-setter side — we know our own secret, so we can color each digit

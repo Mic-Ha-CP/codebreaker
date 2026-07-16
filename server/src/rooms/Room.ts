@@ -10,6 +10,7 @@ import type {
   ClientRoomState,
   ClientPlayerGameState,
   GameEndPayload,
+  BotDifficulty,
 } from '../../../shared/types.js';
 import { calculateFeedback } from '../game/feedback.js';
 import { validateSecret, validateGuess, validateRules } from '../game/validation.js';
@@ -37,14 +38,28 @@ export class Room {
       winnerId: null,
       isDraw: false,
       pendingTiebreaker: null,
+      botDifficulty: null,
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
     };
   }
 
+  /**
+   * Marks this as a solo (vs-computer) room; set once at creation by the bot
+   * orchestration in socket.ts. Nothing in Room's game logic reads it — the
+   * bot is just an ordinary player as far as this class is concerned.
+   */
+  setBotDifficulty(difficulty: BotDifficulty | null): void {
+    this.state.botDifficulty = difficulty;
+  }
+
   // ── Player management ──────────────────────────────────────────────────
 
-  addPlayer(playerId: PlayerId, nickname: string): { ok: true } | { error: string } {
+  addPlayer(
+    playerId: PlayerId,
+    nickname: string,
+    opts: { isBot?: boolean } = {}
+  ): { ok: true } | { error: string } {
     if (this.state.players.length >= 2) {
       return { error: 'room_full' };
     }
@@ -60,6 +75,7 @@ export class Room {
       isReady: false,
       connected: true,
       disconnectedAt: null,
+      ...(opts.isBot ? { isBot: true } : {}),
     };
 
     this.state.players.push(player);
@@ -398,6 +414,7 @@ export class Room {
       winnerId: this.state.winnerId,
       isDraw: this.state.isDraw,
       pendingTiebreaker: this.state.pendingTiebreaker,
+      botDifficulty: this.state.botDifficulty,
       opponentTypingBuffer: null,
       createdAt: this.state.createdAt,
       lastActivityAt: this.state.lastActivityAt,

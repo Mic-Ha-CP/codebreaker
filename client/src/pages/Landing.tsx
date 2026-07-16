@@ -1,13 +1,21 @@
 import { useState } from "react";
 import { TermButton } from "@/components/codebreaker/TermButton";
 import { useGameStore } from "@/state/gameStore";
+import type { BotDifficulty } from "../../../shared/types";
+
+const DIFFICULTIES: Array<{ id: BotDifficulty; label: string; blurb: string }> = [
+  { id: "easy", label: "EASY", blurb: "forgets what you told it" },
+  { id: "medium", label: "MEDIUM", blurb: "a fair fight" },
+  { id: "hard", label: "HARD", blurb: "forgets nothing" },
+];
 
 export default function Landing() {
   const [nickname, setNicknameLocal] = useState("");
   const [showJoin, setShowJoin] = useState(false);
+  const [showSolo, setShowSolo] = useState(false);
   const [code, setCode] = useState("");
 
-  const { setNickname, createRoom, joinRoom } = useGameStore();
+  const { setNickname, createRoom, createSolo, joinRoom } = useGameStore();
 
   const handleCreate = () => {
     setNickname(nickname);
@@ -17,6 +25,21 @@ export default function Landing() {
   const handleJoin = () => {
     setNickname(nickname);
     joinRoom(code); // stub — M3: connects socket + emits C2S.JOIN_ROOM
+  };
+
+  const handleSolo = (difficulty: BotDifficulty) => {
+    setNickname(nickname);
+    createSolo(difficulty);
+  };
+
+  const toggleJoin = () => {
+    setShowJoin((s) => !s);
+    setShowSolo(false);
+  };
+
+  const toggleSolo = () => {
+    setShowSolo((s) => !s);
+    setShowJoin(false);
   };
 
   return (
@@ -41,7 +64,7 @@ export default function Landing() {
           <TermButton variant="primary" disabled={!nickname} onClick={handleCreate}>
             CREATE ROOM
           </TermButton>
-          <TermButton variant="secondary" onClick={() => setShowJoin((s) => !s)}>
+          <TermButton variant="secondary" onClick={toggleJoin}>
             JOIN ROOM
           </TermButton>
 
@@ -62,6 +85,27 @@ export default function Landing() {
               >
                 ENTER →
               </TermButton>
+            </div>
+          )}
+
+          <TermButton variant="secondary" onClick={toggleSolo}>
+            VS COMPUTER
+          </TermButton>
+
+          {showSolo && (
+            <div className="flex flex-col gap-2 mt-2">
+              <label className="text-xs uppercase tracking-terminal text-muted">difficulty</label>
+              {DIFFICULTIES.map((d) => (
+                <button
+                  key={d.id}
+                  disabled={!nickname}
+                  onClick={() => handleSolo(d.id)}
+                  className="w-full min-h-[44px] flex items-baseline justify-between gap-3 border border-border px-4 py-3 text-left transition-colors hover:border-foreground disabled:opacity-40 disabled:hover:border-border"
+                >
+                  <span className="tracking-terminal">{d.label}</span>
+                  <span className="text-xs text-muted tracking-terminal">// {d.blurb}</span>
+                </button>
+              ))}
             </div>
           )}
         </div>

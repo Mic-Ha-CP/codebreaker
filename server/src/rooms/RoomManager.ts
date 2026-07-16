@@ -7,9 +7,20 @@ export class RoomManager {
   private readonly MAX_ROOMS = 5;
   private readonly IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private onRemove: ((code: RoomCode) => void) | null = null;
 
   constructor() {
     this.startCleanupTimer();
+  }
+
+  /**
+   * Fires whenever a room goes away, including via the idle sweep. Lets
+   * whoever holds per-room resources release them without having to poll.
+   * (Generic lifecycle, no game knowledge — the vs-computer driver uses it to
+   * drop its solver state and cancel pending timers.)
+   */
+  onRoomRemoved(cb: (code: RoomCode) => void): void {
+    this.onRemove = cb;
   }
 
   createRoom(hostId: PlayerId, nickname: string, rules?: Partial<Rules>): Room | { error: string } {
@@ -51,7 +62,7 @@ export class RoomManager {
   }
 
   removeRoom(code: RoomCode): void {
-    this.rooms.delete(code);
+    if (this.rooms.delete(code)) this.onRemove?.(code);
   }
 
   private startCleanupTimer(): void {
@@ -80,6 +91,6 @@ export class RoomManager {
       clearInterval(this.cleanupTimer);
       this.cleanupTimer = null;
     }
-    this.rooms.clear();
+    for (const code of [...this.rooms.keys()]) this.removeRoom(code);
   }
 }

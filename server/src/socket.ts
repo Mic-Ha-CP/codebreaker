@@ -3,7 +3,9 @@ import { Server, Socket } from 'socket.io';
 import { C2S, S2C } from '../../shared/events.js';
 import { RoomManager } from './rooms/RoomManager.js';
 import { Room } from './rooms/Room.js';
-import type { PlayerId } from '../../shared/types.js';
+import { BotDriver, type BotHooks } from './game/bot/BotDriver.js';
+import { isBotDifficulty } from './game/bot/solver.js';
+import type { GuessResult, PlayerId } from '../../shared/types.js';
 
 let roomManager: RoomManager;
 
@@ -11,10 +13,29 @@ const DISCONNECT_FORFEIT_MS = 30_000;
 
 export function initSocket(server: HTTPServer, clientOrigin: string) {
   roomManager = new RoomManager();
+  const botDriver = new BotDriver();
+  // Covers every exit a room has, including RoomManager's idle sweep — without
+  // this the driver would leak solver state for swept solo rooms.
+  roomManager.onRoomRemoved((code) => botDriver.detach(code));
 
   const io = new Server(server, {
     cors: { origin: clientOrigin, credentials: true },
   });
+
+  const botHooks: BotHooks = {
+    onStateChange: (room) => broadcastRoomState(io, room),
+    onGuess: (room, result, gameEnded) => emitGuessOutcome(io, room, result, gameEnded),
+  };
+
+  /**
+   * The single choke point after any room mutation: push the new state to the
+   * humans, then let the bot notice whether it now owes a move. A no-op for
+   * ordinary 2-human rooms.
+   */
+  function afterRoomMutation(room: Room): void {
+    broadcastRoomState(io, room);
+    botDriver.tick(room, botHooks);
+  }
 
   // Track current socket per playerId so we can: (a) route emits via
   // io.to(playerId) (each socket joins its own playerId room on
@@ -68,6 +89,40 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
       console.log(`[room] ${room.state.code} created by ${nickname} (${playerId})`);
     });
 
+    // ── Create solo room (vs computer) ───────────────────────────────────
+    socket.on(C2S.CREATE_SOLO, (payload: { playerId: string; nickname: string; difficulty: string }) => {
+      const { playerId, nickname, difficulty } = payload ?? {};
+      if (!playerId || !nickname || nickname.trim().length === 0) {
+        socket.emit(S2C.ERROR, { code: 'invalid_input', message: 'Nickname is required' });
+        return;
+      }
+      if (!isBotDifficulty(difficulty)) {
+        socket.emit(S2C.ERROR, { code: 'invalid_input', message: getErrorMessage('invalid_input') });
+        return;
+      }
+
+      const result = roomManager.createRoom(playerId, nickname.trim());
+      if ('error' in result) {
+        socket.emit(S2C.ERROR, { code: result.error, message: getErrorMessage(result.error) });
+        return;
+      }
+
+      const room = result;
+      const attached = botDriver.attach(room, difficulty);
+      if ('error' in attached) {
+        roomManager.removeRoom(room.state.code);
+        socket.emit(S2C.ERROR, { code: attached.error, message: getErrorMessage(attached.error) });
+        return;
+      }
+
+      socket.join(room.state.code);
+      bindPlayer(socket, playerId);
+
+      socket.emit(S2C.ROOM_STATE, room.toClientState(playerId));
+      botDriver.tick(room, botHooks); // the bot readies itself up
+      console.log(`[room] ${room.state.code} solo (${difficulty}) created by ${nickname}`);
+    });
+
     // ── Join room ────────────────────────────────────────────────────────
     socket.on(C2S.JOIN_ROOM, (payload: { playerId: string; nickname: string; code: string }) => {
       const { playerId, nickname, code } = payload;
@@ -80,6 +135,11 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
       const room = roomManager.getRoom(roomCode);
       if (!room) {
         socket.emit(S2C.ERROR, { code: 'room_not_found', message: 'Room not found' });
+        return;
+      }
+
+      if (botDriver.isSolo(roomCode)) {
+        socket.emit(S2C.ERROR, { code: 'solo_room', message: getErrorMessage('solo_room') });
         return;
       }
 
@@ -97,7 +157,7 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
       socket.join(room.state.code);
       bindPlayer(socket, playerId);
 
-      broadcastRoomState(io, room);
+      afterRoomMutation(room);
       console.log(`[room] ${playerId} (${nickname}) joined ${room.state.code}`);
     });
 
@@ -131,7 +191,7 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
       room.markReconnected(playerId);
 
       socket.emit(S2C.ROOM_STATE, room.toClientState(playerId));
-      broadcastRoomState(io, room);
+      afterRoomMutation(room);
       console.log(`[room] ${playerId} reconnected to ${room.state.code}`);
     });
 
@@ -149,10 +209,13 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
       unbindSocket(socket.id);
       room.removePlayer(playerId);
 
-      if (room.state.players.length === 0) {
+      if (botDriver.isSolo(room.state.code)) {
+        // A bot must never be left holding a room on its own.
+        roomManager.removeRoom(room.state.code);
+      } else if (room.state.players.length === 0) {
         roomManager.removeRoom(room.state.code);
       } else {
-        broadcastRoomState(io, room);
+        afterRoomMutation(room);
       }
     });
 
@@ -171,7 +234,7 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
         return;
       }
 
-      broadcastRoomState(io, room);
+      afterRoomMutation(room);
     });
 
     // ── Update rules ─────────────────────────────────────────────────────
@@ -189,7 +252,7 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
         return;
       }
 
-      broadcastRoomState(io, room);
+      afterRoomMutation(room);
     });
 
     // ── Submit secret ────────────────────────────────────────────────────
@@ -207,7 +270,7 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
         return;
       }
 
-      broadcastRoomState(io, room);
+      afterRoomMutation(room);
     });
 
     // ── Typing update ───────────────────────────────────────────────────
@@ -237,29 +300,8 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
         return;
       }
 
-      if (result.gameEnded) {
-        const revealedSecrets: Record<string, number[]> = {};
-        for (const player of room.state.players) {
-          const pState = room.state.playerStates[player.id];
-          if (pState?.secret) {
-            revealedSecrets[player.id] = pState.secret;
-          }
-        }
-
-        const endPayload = {
-          winnerId: room.state.winnerId,
-          isDraw: room.state.isDraw,
-          reason: 'guessed' as const,
-          revealedSecrets,
-        };
-
-        io.to(room.state.code).emit(S2C.REVEAL_GUESS, { result: result.result });
-        io.to(room.state.code).emit(S2C.GAME_END, endPayload);
-        io.to(room.state.code).emit(S2C.ROOM_STATE, room.toClientState(playerId));
-      } else {
-        io.to(room.state.code).emit(S2C.REVEAL_GUESS, { result: result.result });
-        broadcastRoomState(io, room);
-      }
+      emitGuessOutcome(io, room, result.result, result.gameEnded);
+      botDriver.tick(room, botHooks); // it may now be the bot's turn
     });
 
     // ── Request rematch ──────────────────────────────────────────────────
@@ -277,7 +319,7 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
       }
 
       room.rematch();
-      broadcastRoomState(io, room);
+      afterRoomMutation(room); // the bot re-readies for the new game
     });
 
     // ── Disconnect ───────────────────────────────────────────────────────
@@ -304,17 +346,18 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
 
       if (room.state.phase === 'lobby') {
         room.removePlayer(playerId);
-        if (room.state.players.length === 0) {
+        if (botDriver.isSolo(room.state.code) || room.state.players.length === 0) {
           roomManager.removeRoom(room.state.code);
         } else {
-          broadcastRoomState(io, room);
+          afterRoomMutation(room);
         }
         return;
       }
 
-      // In-game disconnect: mark + start a cancellable 30s forfeit timer.
+      // In-game disconnect: mark + start a cancellable 30s forfeit timer. Solo
+      // rooms included — the human may still reconnect inside the window.
       room.markDisconnected(playerId);
-      broadcastRoomState(io, room);
+      afterRoomMutation(room);
 
       const timer = setTimeout(() => {
         const stillDisconnected = room.getPlayer(playerId)?.connected === false;
@@ -345,6 +388,30 @@ function broadcastRoomState(io: Server, room: Room): void {
   }
 }
 
+/**
+ * Emits the fallout of one guess. Shared by the human handler and the bot
+ * driver so a bot turn is indistinguishable from a human turn on the wire.
+ */
+function emitGuessOutcome(io: Server, room: Room, result: GuessResult, gameEnded: boolean): void {
+  io.to(room.state.code).emit(S2C.REVEAL_GUESS, { result });
+
+  if (gameEnded) {
+    const revealedSecrets: Record<string, number[]> = {};
+    for (const player of room.state.players) {
+      const pState = room.state.playerStates[player.id];
+      if (pState?.secret) revealedSecrets[player.id] = pState.secret;
+    }
+    io.to(room.state.code).emit(S2C.GAME_END, {
+      winnerId: room.state.winnerId,
+      isDraw: room.state.isDraw,
+      reason: 'guessed' as const,
+      revealedSecrets,
+    });
+  }
+
+  broadcastRoomState(io, room);
+}
+
 function getErrorMessage(code: string): string {
   const messages: Record<string, string> = {
     room_full: 'Room is full (max 2 players)',
@@ -368,6 +435,7 @@ function getErrorMessage(code: string): string {
     not_in_room: 'You are not in a room',
     game_in_progress: 'Game already in progress',
     reconnect_failed: 'Could not reconnect to your previous game',
+    solo_room: 'That room is a solo game against the computer',
   };
   return messages[code] || 'An error occurred';
 }

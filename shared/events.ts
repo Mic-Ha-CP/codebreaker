@@ -1,6 +1,7 @@
 // Client → Server
 export const C2S = {
   CREATE_ROOM: 'c:create_room',
+  CREATE_SOLO: 'c:create_solo',
   JOIN_ROOM: 'c:join_room',
   LEAVE_ROOM: 'c:leave_room',
   UPDATE_RULES: 'c:update_rules',

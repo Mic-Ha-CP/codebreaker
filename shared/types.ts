@@ -20,6 +20,8 @@ export interface Player {
   isReady: boolean;
   connected: boolean;
   disconnectedAt: number | null;
+  /** A server-driven virtual player. Absent/false for humans. */
+  isBot?: boolean;
 }
 
 // === Rules ===
@@ -28,6 +30,12 @@ export interface Rules {
   allowRepeats: boolean;
   totalRounds: number;
 }
+
+// === Bot (vs-computer) ===
+// Boundary note (docs/design-vs-computer.md §platform-boundary): the solver
+// levels are GAME-SPECIFIC to Codebreaker. `Player.isBot` below is the only
+// platform-GENERIC extension here — reported to platform-docs.
+export type BotDifficulty = 'easy' | 'medium' | 'hard';
 
 // === Game state ===
 export interface GuessResult {
@@ -62,6 +70,8 @@ export interface RoomState {
     triggeredByPlayerId: PlayerId;
     tiebreakerPlayerId: PlayerId;
   } | null;
+  /** Non-null iff this is a solo (vs-computer) room. Fixed at creation. */
+  botDifficulty: BotDifficulty | null;
   createdAt: number;
   lastActivityAt: number;
 }

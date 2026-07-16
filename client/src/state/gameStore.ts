@@ -3,6 +3,7 @@ import { io, Socket } from 'socket.io-client';
 import { toast } from 'sonner';
 import { C2S } from '../../../shared/events';
 import type {
+  BotDifficulty,
   ClientRoomState,
   ClientPlayerGameState,
   GameEndPayload,
@@ -107,6 +108,7 @@ interface GameStore {
   disconnect: () => void;
   forceReconnect: () => void;
   createRoom: (rules?: Partial<Rules>) => void;
+  createSolo: (difficulty: BotDifficulty) => void;
   joinRoom: (code: string) => void;
   leaveRoom: () => void;
   toggleReady: () => void;
@@ -184,6 +186,7 @@ function createMockRoomState(
     winnerId: phase === 'ended' ? MOCK_MY_ID : null,
     isDraw: false,
     pendingTiebreaker: null,
+    botDifficulty: null,
     opponentTypingBuffer: phase === 'in_progress' ? [5, 2, null, null] : null,
     createdAt: Date.now(),
     lastActivityAt: Date.now(),
@@ -391,6 +394,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!nickname.trim()) return;
     const playerId = getOrCreatePlayerId();
     socket?.emit(C2S.CREATE_ROOM, { playerId, nickname: nickname.trim(), rules });
+  },
+
+  createSolo: (difficulty) => {
+    const { nickname } = get();
+    if (!nickname.trim()) return;
+    const playerId = getOrCreatePlayerId();
+    socket?.emit(C2S.CREATE_SOLO, { playerId, nickname: nickname.trim(), difficulty });
   },
 
   joinRoom: (code) => {

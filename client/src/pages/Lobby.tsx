@@ -13,10 +13,11 @@ export default function Lobby() {
 
   if (!roomState) return null;
 
-  const { code, players, rules } = roomState;
+  const { code, players, rules, botDifficulty } = roomState;
   const me = players.find((p) => p.id === myId);
   const isHost = me?.isHost ?? false;
   const allReady = players.length === 2 && players.every((p) => p.isReady);
+  const isSolo = botDifficulty !== null;
 
   const startEdit = (field: NonNullable<EditingField>) => {
     setEditing(field);
@@ -45,7 +46,12 @@ export default function Lobby() {
     <div className="min-h-screen flex flex-col">
       <header className="flex items-center justify-between border-b border-border-soft px-6 py-4">
         <div className="text-sm tracking-terminal">
-          ROOM <span className="text-muted">#</span>{code}
+          {/* A solo room has a code, but there is nobody to share it with. */}
+          {isSolo ? (
+            <>SOLO <span className="text-muted">// vs {botDifficulty}</span></>
+          ) : (
+            <>ROOM <span className="text-muted">#</span>{code}</>
+          )}
         </div>
         <TermButton variant="secondary" onClick={leaveRoom}>[ LEAVE ]</TermButton>
       </header>
@@ -58,7 +64,12 @@ export default function Lobby() {
             <ul className="flex flex-col gap-2 font-mono">
               {players.map((p) => (
                 <li key={p.id} className="flex items-center justify-between">
-                  <span>&gt; {p.nickname}</span>
+                  <span>
+                    &gt; {p.nickname}
+                    {p.isBot && botDifficulty && (
+                      <span className="text-muted"> · {botDifficulty.toUpperCase()}</span>
+                    )}
+                  </span>
                   {p.isHost && (
                     <span className="text-xs text-muted tracking-terminal">HOST</span>
                   )}
@@ -119,6 +130,7 @@ export default function Lobby() {
                     )}
                   >
                     [{p.isReady ? 'X' : ' '}] {p.nickname} — {p.isReady ? 'ready' : 'not ready'}
+                    {p.isBot && ' (auto)'}
                   </button>
                 </li>
               ))}
