@@ -8,7 +8,6 @@ import Landing from "./pages/Landing";
 import Lobby from "./pages/Lobby";
 import SetSecret from "./pages/SetSecret";
 import Game from "./pages/Game";
-import End from "./pages/End";
 import { DevNav } from "./components/codebreaker/DevNav";
 
 const App = () => {
@@ -53,8 +52,10 @@ const App = () => {
         {!phase && <Landing />}
         {phase === 'lobby' && <Lobby />}
         {phase === 'setting_secret' && <SetSecret />}
-        {(phase === 'in_progress' || phase === 'revealing') && <Game />}
-        {phase === 'ended' && <End />}
+        {/* 'ended' stays on Game: the result is a banner in the input strip, so
+            the board you just played — colour coding, your own secret and all —
+            remains on screen instead of being replaced by a summary of itself. */}
+        {(phase === 'in_progress' || phase === 'revealing' || phase === 'ended') && <Game />}
       </div>
 
       {showConnectionLost && (

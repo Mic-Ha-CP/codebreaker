@@ -38,6 +38,26 @@ const MARK_COLOR: Record<DigitMark, string> = {
   wrong: '#ffffff',
 };
 
+type Outcome = 'win' | 'lose' | 'draw';
+
+// Reuses the E/P palette rather than inventing a result colour. A loss stays
+// plain foreground — readable, and the terminal look doesn't want a red alarm.
+const OUTCOME_COLOR: Record<Outcome, string | undefined> = {
+  win: MARK_COLOR.exact,
+  draw: MARK_COLOR.partial,
+  lose: undefined,
+};
+
+const OUTCOME_HEADLINE: Record<Outcome, string> = {
+  win: 'YOU WIN',
+  lose: 'YOU LOSE',
+  draw: 'DRAW',
+};
+
+function Code({ digits }: { digits: number[] }) {
+  return <span className="text-foreground tracking-[0.3em]">{digits.join(' ')}</span>;
+}
+
 function GuessLine({ row, marks }: { row: GuessResult; marks?: DigitMark[] }) {
   return (
     <div className="font-mono flex items-center gap-6 text-base">
@@ -98,12 +118,14 @@ export default function Game() {
   const {
     myId,
     roomState,
+    gameEndPayload,
     inputBuffer,
     cursorPos,
     inputDigit,
     deleteDigit,
     setCursor,
     submitGuess,
+    requestRematch,
     leaveRoom,
   } = useGameStore();
 
@@ -123,6 +145,23 @@ export default function Game() {
   const opponentDisconnected = opponent
     ? !opponent.connected && opponent.disconnectedAt !== null
     : false;
+
+  // The game ends in place: the board stays exactly where it was and the input
+  // strip becomes the result banner. Nothing covers the history you just played.
+  const gameOver = roomState?.phase === 'ended';
+  const outcome: Outcome | null = !gameOver
+    ? null
+    : roomState.isDraw || roomState.winnerId === null
+    ? 'draw'
+    : roomState.winnerId === myId
+    ? 'win'
+    : 'lose';
+  // Prefer room state over the s:game_end payload: it survives a reconnect
+  // after the game has already finished, where the one-shot event does not.
+  const oppSecret =
+    (opponentId ? roomState?.playerStates[opponentId]?.secret : null) ??
+    (opponentId ? gameEndPayload?.revealedSecrets[opponentId] : null) ??
+    null;
 
   // The bot has no keyboard, so there is nothing to mirror — we show that it is
   // working instead of faking keystrokes. Driven purely off whose turn it is.
@@ -207,10 +246,14 @@ export default function Game() {
       <header className="flex items-center justify-between border-b border-border-soft px-4 md:px-6 py-3 text-xs tracking-terminal text-muted">
         <div className="flex items-center gap-3 md:gap-8 flex-wrap">
           <span className="text-foreground">ROOM #{roomState?.code}</span>
-          <span>
-            ROUND <span className="text-foreground">{roomState?.currentRound ?? 1}</span>{" "}
-            / {rules?.totalRounds ?? 10}
-          </span>
+          {gameOver ? (
+            <span className="text-foreground">GAME OVER</span>
+          ) : (
+            <span>
+              ROUND <span className="text-foreground">{roomState?.currentRound ?? 1}</span>{" "}
+              / {rules?.totalRounds ?? 10}
+            </span>
+          )}
           <span>{codeLength}d · {rules?.allowRepeats ? 'repeats' : 'no-rep'}</span>
         </div>
         <TermButton variant="ghost" onClick={leaveRoom}>[ LEAVE ]</TermButton>
@@ -239,7 +282,18 @@ export default function Game() {
           of opponent activity. */}
       <div className="md:hidden px-4 py-2 border-b border-border-soft font-mono text-xs text-muted flex items-center gap-2">
         <span>OPP:</span>
-        {botThinking ? (
+        {/* Post-game this strip carries the reveal, so the code is readable from
+            either tab without hunting for it. */}
+        {gameOver ? (
+          oppSecret ? (
+            <>
+              <Code digits={oppSecret} />
+              <span className="italic">(revealed)</span>
+            </>
+          ) : (
+            <span className="italic">—</span>
+          )
+        ) : botThinking ? (
           <span className="text-foreground">computing<span className="animate-pulse">_</span></span>
         ) : oppTyping ? (
           <span className="tracking-[0.3em] text-foreground">
@@ -269,12 +323,14 @@ export default function Game() {
           <div className="flex flex-col gap-2">
             {/* Guesser side — never highlight per-digit (player must work out which digits are correct). */}
             {myHistory.map((r, i) => <GuessLine key={i} row={r} />)}
-            <PendingLine
-              prefix=">"
-              values={digits}
-              cursor={yourTurn ? cursorPos : null}
-              label={!yourTurn ? "(locked)" : undefined}
-            />
+            {!gameOver && (
+              <PendingLine
+                prefix=">"
+                values={digits}
+                cursor={yourTurn ? cursorPos : null}
+                label={!yourTurn ? "(locked)" : undefined}
+              />
+            )}
           </div>
         </section>
 
@@ -311,33 +367,75 @@ export default function Game() {
         </section>
       </div>
 
-      {/* Status + number pad stack — fixed to bottom on mobile so the iOS
-          on-screen keyboard (if anyone uses one) and small viewports don't
-          push the input controls off-screen. */}
+      {/* Bottom strip — fixed on mobile so the iOS on-screen keyboard and small
+          viewports don't push it off-screen. Holds the status + number pad
+          during play, and the result banner once the game is over: the pad is
+          useless then, and this way nothing has to cover the boards. */}
       <div className="fixed bottom-0 left-0 right-0 md:static bg-background z-30">
-        <div className="flex items-center justify-between border-t border-border-soft px-4 md:px-6 py-3 text-sm tracking-terminal">
-          <div>
-            <span className="text-muted">STATUS:</span> <span>{status}</span>
-          </div>
-          <button
-            onClick={() => setShowHelp((s) => !s)}
-            className="border border-border w-8 h-8 hover:bg-foreground hover:text-background transition-colors"
+        {gameOver ? (
+          <div
+            data-testid="result-banner"
+            className="border-t border-border flex flex-col md:flex-row md:items-center md:justify-between gap-4 px-4 md:px-6 py-5 text-center md:text-left"
           >
-            ?
-          </button>
-        </div>
-
-        <div className="border-t border-border-soft p-4 md:p-6">
-          <div className="max-w-[640px] mx-auto">
-            <NumberPad
-              onDigit={onDigit}
-              onDelete={onDelete}
-              onSubmit={onSubmit}
-              canSubmit={yourTurn && digits.every((d) => d !== null)}
-              disabled={inputLocked}
-            />
+            <div className="flex flex-col md:flex-row md:items-baseline gap-2 md:gap-6">
+              <span
+                className="text-3xl md:text-2xl tracking-brand font-semibold"
+                style={{ color: OUTCOME_COLOR[outcome!] }}
+              >
+                {OUTCOME_HEADLINE[outcome!]}
+              </span>
+              <span className="text-sm text-muted tracking-terminal">
+                {outcome === 'draw' ? (
+                  // Both cracked it, so "opponent's code was" would read oddly —
+                  // on a draw the two codes are symmetric and both worth seeing.
+                  <>
+                    codes — yours {mySecret ? <Code digits={mySecret} /> : '?'}
+                    <span className="px-2">·</span>
+                    theirs {oppSecret ? <Code digits={oppSecret} /> : '?'}
+                  </>
+                ) : oppSecret ? (
+                  <>
+                    opponent's code was <Code digits={oppSecret} />
+                  </>
+                ) : null}
+              </span>
+            </div>
+            <div className="flex gap-3 justify-center md:justify-end shrink-0">
+              <TermButton variant="filled" onClick={requestRematch}>
+                [ REMATCH ]
+              </TermButton>
+              <TermButton variant="secondary" onClick={leaveRoom}>
+                [ LEAVE ]
+              </TermButton>
+            </div>
           </div>
-        </div>
+        ) : (
+          <>
+            <div className="flex items-center justify-between border-t border-border-soft px-4 md:px-6 py-3 text-sm tracking-terminal">
+              <div>
+                <span className="text-muted">STATUS:</span> <span>{status}</span>
+              </div>
+              <button
+                onClick={() => setShowHelp((s) => !s)}
+                className="border border-border w-8 h-8 hover:bg-foreground hover:text-background transition-colors"
+              >
+                ?
+              </button>
+            </div>
+
+            <div className="border-t border-border-soft p-4 md:p-6">
+              <div className="max-w-[640px] mx-auto">
+                <NumberPad
+                  onDigit={onDigit}
+                  onDelete={onDelete}
+                  onSubmit={onSubmit}
+                  canSubmit={yourTurn && digits.every((d) => d !== null)}
+                  disabled={inputLocked}
+                />
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {showHelp && (
@@ -359,7 +457,9 @@ export default function Game() {
         </div>
       )}
 
-      {opponentDisconnected && (
+      {/* Once the forfeit has actually fired the banner says YOU WIN and offers
+          the same exits, so this countdown has nothing left to do. */}
+      {opponentDisconnected && !gameOver && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90">
           <div className="border border-border bg-background p-10 max-w-sm w-full font-mono text-center">
             <h3 className="text-sm tracking-terminal mb-6">OPPONENT DISCONNECTED</h3>
