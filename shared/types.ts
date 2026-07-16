@@ -33,8 +33,8 @@ export interface Rules {
 
 // === Bot (vs-computer) ===
 // Boundary note (docs/design-vs-computer.md §platform-boundary): the solver
-// levels are GAME-SPECIFIC to Codebreaker. `Player.isBot` below is the only
-// platform-GENERIC extension here — reported to platform-docs.
+// levels are GAME-SPECIFIC to Codebreaker. `Player.isBot` below is the
+// platform-GENERIC marker — reported to platform-docs.
 export type BotDifficulty = 'easy' | 'medium' | 'hard';
 
 // === Game state ===
@@ -70,8 +70,12 @@ export interface RoomState {
     triggeredByPlayerId: PlayerId;
     tiebreakerPlayerId: PlayerId;
   } | null;
-  /** Non-null iff this is a solo (vs-computer) room. Fixed at creation. */
-  botDifficulty: BotDifficulty | null;
+  /**
+   * Difficulty per bot player, keyed like `playerStates`. There is no such
+   * thing as a "solo room" — a bot is just a player that occupies a seat, so
+   * this is a property of the player, not of the room.
+   */
+  botDifficulties: Record<PlayerId, BotDifficulty>;
   createdAt: number;
   lastActivityAt: number;
 }

@@ -2,22 +2,26 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { TermButton } from "@/components/codebreaker/TermButton";
 import { useGameStore } from "@/state/gameStore";
-import type { Rules } from "../../../shared/types";
+import type { BotDifficulty, Rules } from "../../../shared/types";
 
 type EditingField = keyof Pick<Rules, 'codeLength' | 'allowRepeats' | 'totalRounds'> | null;
 
+const BOT_DIFFICULTIES: BotDifficulty[] = ['easy', 'medium', 'hard'];
+
 export default function Lobby() {
-  const { myId, roomState, toggleReady, leaveRoom, updateRules } = useGameStore();
+  const { myId, roomState, toggleReady, leaveRoom, updateRules, addBot, kickPlayer } =
+    useGameStore();
   const [editing, setEditing] = useState<EditingField>(null);
   const [draft, setDraft] = useState<string>('');
+  const [showAddBot, setShowAddBot] = useState(false);
 
   if (!roomState) return null;
 
-  const { code, players, rules, botDifficulty } = roomState;
+  const { code, players, rules, botDifficulties } = roomState;
   const me = players.find((p) => p.id === myId);
   const isHost = me?.isHost ?? false;
   const allReady = players.length === 2 && players.every((p) => p.isReady);
-  const isSolo = botDifficulty !== null;
+  const hasOpenSlot = players.length < 2;
 
   const startEdit = (field: NonNullable<EditingField>) => {
     setEditing(field);
@@ -45,13 +49,9 @@ export default function Lobby() {
   return (
     <div className="min-h-screen flex flex-col">
       <header className="flex items-center justify-between border-b border-border-soft px-6 py-4">
+        {/* Always shown: kick the bot and the seat is joinable by code again. */}
         <div className="text-sm tracking-terminal">
-          {/* A solo room has a code, but there is nobody to share it with. */}
-          {isSolo ? (
-            <>SOLO <span className="text-muted">// vs {botDifficulty}</span></>
-          ) : (
-            <>ROOM <span className="text-muted">#</span>{code}</>
-          )}
+          ROOM <span className="text-muted">#</span>{code}
         </div>
         <TermButton variant="secondary" onClick={leaveRoom}>[ LEAVE ]</TermButton>
       </header>
@@ -63,20 +63,54 @@ export default function Lobby() {
             <h2 className="text-xs uppercase tracking-terminal text-muted mb-4">players</h2>
             <ul className="flex flex-col gap-2 font-mono">
               {players.map((p) => (
-                <li key={p.id} className="flex items-center justify-between">
+                <li key={p.id} className="flex items-center justify-between gap-3">
                   <span>
                     &gt; {p.nickname}
-                    {p.isBot && botDifficulty && (
-                      <span className="text-muted"> · {botDifficulty.toUpperCase()}</span>
+                    {p.isBot && botDifficulties[p.id] && (
+                      <span className="text-muted"> · {botDifficulties[p.id].toUpperCase()}</span>
                     )}
                   </span>
-                  {p.isHost && (
-                    <span className="text-xs text-muted tracking-terminal">HOST</span>
-                  )}
+                  <div className="flex items-center gap-3">
+                    {p.isHost && (
+                      <span className="text-xs text-muted tracking-terminal">HOST</span>
+                    )}
+                    {/* Bots and humans kick the same way — a seat is a seat. */}
+                    {isHost && p.id !== myId && (
+                      <TermButton variant="ghost" onClick={() => kickPlayer(p.id)}>
+                        [ KICK ]
+                      </TermButton>
+                    )}
+                  </div>
                 </li>
               ))}
-              {players.length < 2 && (
-                <li className="italic text-muted">&gt; waiting...</li>
+
+              {hasOpenSlot && !isHost && <li className="italic text-muted">&gt; waiting...</li>}
+
+              {hasOpenSlot && isHost && (
+                <li className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="italic text-muted">&gt; waiting...</span>
+                    <TermButton variant="ghost" onClick={() => setShowAddBot((s) => !s)}>
+                      [ + ADD BOT {showAddBot ? '▴' : '▾'} ]
+                    </TermButton>
+                  </div>
+                  {showAddBot && (
+                    <div className="flex gap-2 pl-4">
+                      {BOT_DIFFICULTIES.map((d) => (
+                        <button
+                          key={d}
+                          onClick={() => {
+                            setShowAddBot(false);
+                            addBot(d);
+                          }}
+                          className="min-h-[44px] flex-1 border border-border px-3 py-2 text-xs uppercase tracking-terminal transition-colors hover:border-foreground"
+                        >
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </li>
               )}
             </ul>
           </section>

@@ -96,6 +96,10 @@ interface GameStore {
   // i18n
   lang: 'en' | 'zh';
 
+  // Set by the VS COMPUTER shortcut: create a room, then add a bot to it as
+  // soon as the room comes back. One-shot — cleared when it fires.
+  pendingBotDifficulty: BotDifficulty | null;
+
   // ── local actions ──────────────────────────────────────────────────────────
   setNickname: (n: string) => void;
   inputDigit: (d: number) => void;
@@ -111,6 +115,8 @@ interface GameStore {
   createSolo: (difficulty: BotDifficulty) => void;
   joinRoom: (code: string) => void;
   leaveRoom: () => void;
+  addBot: (difficulty: BotDifficulty) => void;
+  kickPlayer: (playerId: string) => void;
   toggleReady: () => void;
   updateRules: (rules: Partial<Rules>) => void;
   submitSecret: () => void;
@@ -186,7 +192,7 @@ function createMockRoomState(
     winnerId: phase === 'ended' ? MOCK_MY_ID : null,
     isDraw: false,
     pendingTiebreaker: null,
-    botDifficulty: null,
+    botDifficulties: {},
     opponentTypingBuffer: phase === 'in_progress' ? [5, 2, null, null] : null,
     createdAt: Date.now(),
     lastActivityAt: Date.now(),
@@ -237,6 +243,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   cursorPos: 0,
   opponentTyping: null,
   lang: 'en',
+  pendingBotDifficulty: null,
 
   // ── local ──────────────────────────────────────────────────────────────────
 
@@ -304,6 +311,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // Persist session on every room_state so a fresh page load can recover.
       setStoredSession({ roomCode: state.code, playerId });
 
+      // VS COMPUTER shortcut: our brand-new room just arrived, seat the bot.
+      const pending = get().pendingBotDifficulty;
+      if (
+        pending &&
+        state.phase === 'lobby' &&
+        state.players.length === 1 &&
+        state.players[0].id === playerId
+      ) {
+        set({ pendingBotDifficulty: null });
+        socket?.emit(C2S.ADD_BOT, { difficulty: pending });
+      }
+
       set({
         roomState: state,
         ...(phaseChanged ? {
@@ -358,15 +377,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
       toast.error(message);
     });
 
-    s.on('s:kick', ({ reason }: { reason: string }) => {
+    s.on('s:kick', ({ code, reason }: { code?: string; reason: string }) => {
       toast.warning(`Kicked: ${reason}`);
-      clearStoredSession();
       set({
         roomState: null,
         gameEndPayload: null,
         inputBuffer: [null, null, null, null],
         cursorPos: 0,
       });
+      // Only a host kick means this browser is out of the game for good. The
+      // two-tab guard kicks the LOSING tab, which shares localStorage with the
+      // tab that just took the seat — clearing here would pull that tab's
+      // session out from under it.
+      if (code === 'host_kick') clearStoredSession();
     });
   },
 
@@ -396,11 +419,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
     socket?.emit(C2S.CREATE_ROOM, { playerId, nickname: nickname.trim(), rules });
   },
 
+  // Sugar, not a room type: create an ordinary room and add a bot to it. The
+  // add fires from the s:room_state handler once the room exists.
   createSolo: (difficulty) => {
     const { nickname } = get();
     if (!nickname.trim()) return;
     const playerId = getOrCreatePlayerId();
-    socket?.emit(C2S.CREATE_SOLO, { playerId, nickname: nickname.trim(), difficulty });
+    set({ pendingBotDifficulty: difficulty });
+    socket?.emit(C2S.CREATE_ROOM, { playerId, nickname: nickname.trim() });
+  },
+
+  addBot: (difficulty) => {
+    socket?.emit(C2S.ADD_BOT, { difficulty });
+  },
+
+  kickPlayer: (playerId) => {
+    socket?.emit(C2S.KICK_PLAYER, { playerId });
   },
 
   joinRoom: (code) => {

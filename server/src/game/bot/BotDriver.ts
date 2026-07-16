@@ -47,16 +47,22 @@ export function botIdFor(code: RoomCode): PlayerId {
 }
 
 export class BotDriver {
+  // Keyed by room, which caps this at one bot per room. That is not a
+  // limitation today — rooms hold 2 players, so a bot only ever sits opposite
+  // a human. Re-key by playerId if 3-4 player rooms land (planner P3).
   private states = new Map<RoomCode, BotState>();
 
-  /** Adds the bot to a freshly created room. */
+  /**
+   * Seats a bot in a room's open slot. Callable at any point the room has room
+   * for it — the host adds and kicks bots from the lobby like any other player.
+   */
   attach(room: Room, difficulty: BotDifficulty): { ok: true } | { error: string } {
     const code = room.state.code;
     const botId = botIdFor(code);
     const added = room.addPlayer(botId, BOT_NICKNAME, { isBot: true });
     if ('error' in added) return added;
 
-    room.setBotDifficulty(difficulty);
+    room.setBotDifficulty(botId, difficulty);
     this.states.set(code, {
       botId,
       difficulty,
@@ -69,7 +75,10 @@ export class BotDriver {
     return { ok: true };
   }
 
-  /** Drops all state for a room and cancels anything pending. */
+  /**
+   * Releases a bot's state and cancels anything it had pending. Called when the
+   * host kicks it and when the room goes away (via RoomManager.onRoomRemoved).
+   */
   detach(code: RoomCode): void {
     const st = this.states.get(code);
     if (!st) return;
@@ -77,12 +86,9 @@ export class BotDriver {
     this.states.delete(code);
   }
 
-  isSolo(code: RoomCode): boolean {
+  /** Test/telemetry: is a bot currently seated in this room? */
+  hasBot(code: RoomCode): boolean {
     return this.states.has(code);
-  }
-
-  botIdIn(code: RoomCode): PlayerId | null {
-    return this.states.get(code)?.botId ?? null;
   }
 
   /** Test/telemetry: is an action currently pending for this room? */

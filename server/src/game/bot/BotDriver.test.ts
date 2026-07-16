@@ -39,7 +39,7 @@ describe('BotDriver', () => {
     expect(bot.isBot).toBe(true);
     expect(bot.isHost).toBe(false); // the human created the room
     expect(bot.connected).toBe(true);
-    expect(room.state.botDifficulty).toBe('medium');
+    expect(room.state.botDifficulties[botId]).toBe('medium');
     // The human is untouched by the bot's presence.
     expect(room.getPlayer(HUMAN)!.isBot).toBeUndefined();
   });
@@ -138,7 +138,11 @@ describe('BotDriver', () => {
 
     expect(room.state.phase).toBe('ended');
     expect(room.state.winnerId).toBe(botId);
-    expect(guesses.at(-1)!.gameEnded).toBe(true);
+    // Assert the bot cracked it, NOT that its own guess ended the game: turn
+    // order is a coin flip, and if the bot cracks the code as the round's first
+    // guesser the human is owed a tiebreaker turn — so it is the human's failed
+    // reply that ends the game, not the bot's winning guess.
+    expect(guesses.at(-1)!.result.exact).toBe(4);
     // Every guess it made was scored against the human's real secret.
     for (const g of guesses) {
       expect({ exact: g.result.exact, partial: g.result.partial }).toEqual(
@@ -249,8 +253,87 @@ describe('BotDriver', () => {
     await vi.runAllTimersAsync();
 
     expect(guesses).toHaveLength(0);
-    expect(driver.isSolo('SOLO')).toBe(false);
+    expect(driver.hasBot('SOLO')).toBe(false);
     driver.tick(room, hooks); // must not throw or resurrect the bot
+    await vi.runAllTimersAsync();
+    expect(guesses).toHaveLength(0);
+  });
+
+  it('seats a bot into a room that is already up and running, not just at creation', async () => {
+    // The unified model: the host adds a bot to an ordinary lobby whenever
+    // there is a seat, rather than the room being born "solo".
+    const driver = new BotDriver();
+    const room = new Room('LATE');
+    room.addPlayer(HUMAN, 'me');
+    room.updateRules(HUMAN, { codeLength: 5 });
+    const { hooks } = makeHooks();
+
+    expect(driver.hasBot('LATE')).toBe(false);
+    expect(driver.attach(room, 'easy')).toEqual({ ok: true });
+    driver.tick(room, hooks); // socket.ts does this via afterRoomMutation
+    await vi.runAllTimersAsync();
+
+    const botId = botIdFor('LATE');
+    expect(room.getPlayer(botId)!.isReady).toBe(true);
+    expect(room.state.botDifficulties[botId]).toBe('easy');
+  });
+
+  it('refuses to seat a bot with no seat free', () => {
+    const { driver, room } = soloRoom('easy', 'FULL');
+    expect(room.state.players).toHaveLength(2);
+    expect(driver.attach(room, 'hard')).toEqual({ error: 'room_full' });
+  });
+
+  it('kicking the bot leaves the room waiting in the lobby', async () => {
+    const { driver, room, botId, hooks } = soloRoom('hard', 'KICK');
+    driver.tick(room, hooks);
+    await vi.runAllTimersAsync();
+    expect(room.getPlayer(botId)!.isReady).toBe(true);
+
+    expect(room.kickPlayer(HUMAN, botId)).toEqual({ ok: true });
+    driver.detach('KICK');
+
+    expect(room.state.players).toHaveLength(1);
+    expect(room.state.botDifficulties[botId]).toBeUndefined();
+    expect(driver.hasBot('KICK')).toBe(false);
+    expect(room.state.phase).toBe('lobby');
+
+    // The human being ready must not start a one-player game.
+    room.toggleReady(HUMAN);
+    await vi.runAllTimersAsync();
+    expect(room.state.phase).toBe('lobby');
+  });
+
+  it('re-adding at a new difficulty actually swaps the opponent', async () => {
+    // This is the "rematch at a different difficulty" path.
+    const { driver, room, botId, hooks } = soloRoom('easy', 'SWAP');
+    driver.tick(room, hooks);
+    await vi.runAllTimersAsync();
+    expect(room.state.botDifficulties[botId]).toBe('easy');
+
+    room.kickPlayer(HUMAN, botId);
+    driver.detach('SWAP');
+    expect(driver.attach(room, 'hard')).toEqual({ ok: true });
+    driver.tick(room, hooks);
+    await vi.runAllTimersAsync();
+
+    expect(room.state.botDifficulties[botId]).toBe('hard');
+    expect(room.getPlayer(botId)!.isReady).toBe(true);
+    expect(room.state.players).toHaveLength(2);
+  });
+
+  it('a kicked bot cannot still be holding a timer', async () => {
+    const { driver, room, botId, hooks, guesses } = soloRoom('hard', 'TMR');
+    room.toggleReady(HUMAN);
+    driver.tick(room, hooks);
+    await vi.runAllTimersAsync();
+    room.submitSecret(HUMAN, [1, 2, 3, 4]);
+    room.state.currentTurnPlayerId = botId;
+    driver.tick(room, hooks);
+    expect(driver.hasPending('TMR')).toBe(true);
+
+    // Kicking mid-think must not leave a timer that fires into a dead seat.
+    driver.detach('TMR');
     await vi.runAllTimersAsync();
     expect(guesses).toHaveLength(0);
   });
@@ -262,11 +345,11 @@ describe('BotDriver', () => {
 
     const room = manager.createRoom(HUMAN, 'me') as Room;
     driver.attach(room, 'easy');
-    expect(driver.isSolo(room.state.code)).toBe(true);
+    expect(driver.hasBot(room.state.code)).toBe(true);
 
     // This is the path the idle sweep takes, which is where state would leak.
     manager.removeRoom(room.state.code);
-    expect(driver.isSolo(room.state.code)).toBe(false);
+    expect(driver.hasBot(room.state.code)).toBe(false);
     manager.destroy();
   });
 
@@ -280,7 +363,7 @@ describe('BotDriver', () => {
     const view = room.toClientState(HUMAN);
     expect(view.playerStates[botId].secret).toBeNull();
     expect(view.playerStates[HUMAN].secret).toEqual([1, 2, 3, 4]);
-    expect(view.botDifficulty).toBe('hard');
+    expect(view.botDifficulties[botId]).toBe('hard');
     expect(JSON.stringify(view)).not.toContain(
       JSON.stringify(room.state.playerStates[botId].secret)
     );

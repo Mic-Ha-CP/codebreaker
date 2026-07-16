@@ -397,3 +397,84 @@ describe('Room — disconnect timers', () => {
     expect(() => room.clearDisconnectTimer(aId)).not.toThrow();
   });
 });
+
+describe('kickPlayer', () => {
+  it('host removes another player from the lobby', () => {
+    const { room, aId, bId } = setupReadyRoom();
+    expect(room.kickPlayer(aId, bId)).toEqual({ ok: true });
+    expect(room.state.players.map((p) => p.id)).toEqual([aId]);
+  });
+
+  it('kicks a bot the same way it kicks a human — a seat is a seat', () => {
+    const room = new Room('TEST');
+    room.addPlayer('A', 'alice');
+    room.addPlayer('BOT', 'CPU', { isBot: true });
+    room.setBotDifficulty('BOT', 'hard');
+
+    expect(room.kickPlayer('A', 'BOT')).toEqual({ ok: true });
+    expect(room.state.players.map((p) => p.id)).toEqual(['A']);
+  });
+
+  it('scrubs the kicked player\'s game state and bot difficulty', () => {
+    const room = new Room('TEST');
+    room.addPlayer('A', 'alice');
+    room.addPlayer('BOT', 'CPU', { isBot: true });
+    room.setBotDifficulty('BOT', 'medium');
+    expect(room.state.playerStates['BOT']).toBeDefined();
+
+    room.kickPlayer('A', 'BOT');
+    expect(room.state.playerStates['BOT']).toBeUndefined();
+    expect(room.state.botDifficulties['BOT']).toBeUndefined();
+  });
+
+  it('only the host may kick', () => {
+    const { room, aId, bId } = setupReadyRoom();
+    expect(room.kickPlayer(bId, aId)).toEqual({ error: 'forbidden' });
+    expect(room.state.players).toHaveLength(2);
+  });
+
+  it('cannot kick once the game has left the lobby', () => {
+    const { room, aId, bId } = setupInProgressRoom();
+    expect(room.kickPlayer(aId, bId)).toEqual({ error: 'wrong_phase' });
+    expect(room.state.players).toHaveLength(2);
+  });
+
+  it('cannot kick yourself — that is what leaving is for', () => {
+    const { room, aId } = setupReadyRoom();
+    expect(room.kickPlayer(aId, aId)).toEqual({ error: 'cannot_kick_self' });
+    expect(room.state.players).toHaveLength(2);
+  });
+
+  it('rejects an unknown target', () => {
+    const { room, aId } = setupReadyRoom();
+    expect(room.kickPlayer(aId, 'nobody')).toEqual({ error: 'player_not_found' });
+  });
+
+  it('a kicked seat is open again, so the room accepts a new player', () => {
+    const { room, aId, bId } = setupReadyRoom();
+    expect(room.addPlayer('C', 'carol')).toEqual({ error: 'room_full' });
+    room.kickPlayer(aId, bId);
+    expect(room.addPlayer('C', 'carol')).toEqual({ ok: true });
+  });
+});
+
+describe('hasHumanPlayers', () => {
+  it('true while a human is seated', () => {
+    const room = new Room('TEST');
+    room.addPlayer('A', 'alice');
+    room.addPlayer('BOT', 'CPU', { isBot: true });
+    expect(room.hasHumanPlayers()).toBe(true);
+  });
+
+  it('false once only bots remain — a bot must never hold a room alone', () => {
+    const room = new Room('TEST');
+    room.addPlayer('A', 'alice');
+    room.addPlayer('BOT', 'CPU', { isBot: true });
+    room.removePlayer('A');
+    expect(room.hasHumanPlayers()).toBe(false);
+  });
+
+  it('false for an empty room', () => {
+    expect(new Room('TEST').hasHumanPlayers()).toBe(false);
+  });
+});

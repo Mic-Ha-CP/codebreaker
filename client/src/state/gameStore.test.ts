@@ -70,9 +70,21 @@ function mockRoomState(rules: Rules, phase: ClientRoomState['phase']): ClientRoo
     winnerId: null,
     isDraw: false,
     pendingTiebreaker: null,
+    botDifficulties: {},
     opponentTypingBuffer: null,
     createdAt: Date.now(),
     lastActivityAt: Date.now(),
+  };
+}
+
+function mockPlayer(id: string): ClientRoomState['players'][number] {
+  return {
+    id,
+    nickname: id,
+    isHost: true,
+    isReady: false,
+    connected: true,
+    disconnectedAt: null,
   };
 }
 
@@ -340,6 +352,33 @@ describe('gameStore — stable playerId + session persistence', () => {
     expect(ev?.payload).toMatchObject({ playerId: 'pid-2', nickname: 'bob', code: 'ABCD' });
   });
 
+  it('VS COMPUTER is sugar: a plain create_room, then add_bot once the room lands', async () => {
+    localStorage.setItem('cb_playerId', 'pid-solo');
+    useGameStore.setState({ nickname: 'alice' });
+    useGameStore.getState().connect();
+    useGameStore.getState().createSolo('hard');
+
+    // No solo room type on the wire — just an ordinary room, no bot yet.
+    expect(emitted.find((e) => e.event === 'c:create_room')?.payload).toMatchObject({
+      playerId: 'pid-solo',
+      nickname: 'alice',
+    });
+    expect(emitted.some((e) => e.event === 'c:add_bot')).toBe(false);
+
+    const soloLobby = { ...mockRoomState(RULES_4, 'lobby'), players: [mockPlayer('pid-solo')] };
+    handlers.get('s:room_state')!(soloLobby);
+    await new Promise((r) => setTimeout(r, 700)); // flush any reveal-hold defer
+
+    const addBots = emitted.filter((e) => e.event === 'c:add_bot');
+    expect(addBots).toHaveLength(1);
+    expect(addBots[0].payload).toEqual({ difficulty: 'hard' });
+
+    // One-shot: further room states must not keep seating bots.
+    handlers.get('s:room_state')!(soloLobby);
+    await new Promise((r) => setTimeout(r, 700));
+    expect(emitted.filter((e) => e.event === 'c:add_bot')).toHaveLength(1);
+  });
+
   it('persists {roomCode, playerId} session on s:room_state', async () => {
     localStorage.setItem('cb_playerId', 'pid-3');
     useGameStore.getState().connect();
@@ -359,11 +398,22 @@ describe('gameStore — stable playerId + session persistence', () => {
     expect(localStorage.getItem('cb_session')).toBeNull();
   });
 
-  it('clears session on s:kick', () => {
+  it('clears session and returns to Landing on a host kick', () => {
     localStorage.setItem('cb_session', JSON.stringify({ roomCode: 'TEST', playerId: 'x' }));
     useGameStore.getState().connect();
-    handlers.get('s:kick')!({ reason: 'test' });
+    handlers.get('s:kick')!({ code: 'host_kick', reason: 'Removed by the host' });
     expect(localStorage.getItem('cb_session')).toBeNull();
+    expect(useGameStore.getState().roomState).toBeNull();
+  });
+
+  it('keeps the session when kicked by the two-tab guard', () => {
+    // Both tabs share localStorage, and this kick goes to the tab that LOST
+    // the seat — wiping the session here would break the tab that just won it.
+    localStorage.setItem('cb_session', JSON.stringify({ roomCode: 'TEST', playerId: 'x' }));
+    useGameStore.getState().connect();
+    handlers.get('s:kick')!({ code: 'another_window', reason: 'Reconnected from another window' });
+    expect(localStorage.getItem('cb_session')).not.toBeNull();
+    expect(useGameStore.getState().roomState).toBeNull();
   });
 
   it('clears session on s:error with code reconnect_failed', () => {

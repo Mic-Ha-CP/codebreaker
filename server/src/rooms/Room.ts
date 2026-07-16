@@ -38,19 +38,19 @@ export class Room {
       winnerId: null,
       isDraw: false,
       pendingTiebreaker: null,
-      botDifficulty: null,
+      botDifficulties: {},
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
     };
   }
 
   /**
-   * Marks this as a solo (vs-computer) room; set once at creation by the bot
-   * orchestration in socket.ts. Nothing in Room's game logic reads it — the
-   * bot is just an ordinary player as far as this class is concerned.
+   * Records a bot player's difficulty, set by the bot orchestration in
+   * socket.ts when the bot is added. Nothing in Room's game logic reads it —
+   * a bot is an ordinary player as far as this class is concerned.
    */
-  setBotDifficulty(difficulty: BotDifficulty | null): void {
-    this.state.botDifficulty = difficulty;
+  setBotDifficulty(playerId: PlayerId, difficulty: BotDifficulty): void {
+    this.state.botDifficulties[playerId] = difficulty;
   }
 
   // ── Player management ──────────────────────────────────────────────────
@@ -96,6 +96,7 @@ export class Room {
   removePlayer(playerId: PlayerId): void {
     this.state.players = this.state.players.filter((p) => p.id !== playerId);
     delete this.state.playerStates[playerId];
+    delete this.state.botDifficulties[playerId];
     this.clearDisconnectTimer(playerId);
     this.state.lastActivityAt = Date.now();
 
@@ -103,6 +104,31 @@ export class Room {
     if (this.state.players.length === 1) {
       this.state.players[0].isHost = true;
     }
+  }
+
+  /**
+   * Host removes someone from the lobby — a bot or a human, same rules for
+   * both. Callers own the consequences (evicting the kicked socket, releasing
+   * a bot's driver state); this only touches room membership.
+   */
+  kickPlayer(requesterId: PlayerId, targetId: PlayerId): { ok: true } | { error: string } {
+    if (this.state.phase !== 'lobby') return { error: 'wrong_phase' };
+    const requester = this.getPlayer(requesterId);
+    if (!requester?.isHost) return { error: 'forbidden' };
+    if (requesterId === targetId) return { error: 'cannot_kick_self' };
+    if (!this.getPlayer(targetId)) return { error: 'player_not_found' };
+
+    this.removePlayer(targetId);
+    return { ok: true };
+  }
+
+  /**
+   * False once every remaining seat is a bot (or the room is empty). A room
+   * with nobody real in it has no reason to exist, and a bot must never be
+   * left holding one — or inherit host.
+   */
+  hasHumanPlayers(): boolean {
+    return this.state.players.some((p) => !p.isBot);
   }
 
   getPlayer(playerId: PlayerId): Player | undefined {
@@ -414,7 +440,7 @@ export class Room {
       winnerId: this.state.winnerId,
       isDraw: this.state.isDraw,
       pendingTiebreaker: this.state.pendingTiebreaker,
-      botDifficulty: this.state.botDifficulty,
+      botDifficulties: this.state.botDifficulties,
       opponentTypingBuffer: null,
       createdAt: this.state.createdAt,
       lastActivityAt: this.state.lastActivityAt,

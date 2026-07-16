@@ -126,7 +126,7 @@ export default function Game() {
 
   // The bot has no keyboard, so there is nothing to mirror — we show that it is
   // working instead of faking keystrokes. Driven purely off whose turn it is.
-  const botDifficulty = roomState?.botDifficulty ?? null;
+  const botDifficulty = (opponentId && roomState?.botDifficulties?.[opponentId]) || null;
   const opponentIsBot = opponent?.isBot === true;
   const botThinking = opponentIsBot && !yourTurn && roomState?.phase === 'in_progress';
   const opponentLabel = opponentIsBot && botDifficulty

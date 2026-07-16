@@ -89,38 +89,78 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
       console.log(`[room] ${room.state.code} created by ${nickname} (${playerId})`);
     });
 
-    // ── Create solo room (vs computer) ───────────────────────────────────
-    socket.on(C2S.CREATE_SOLO, (payload: { playerId: string; nickname: string; difficulty: string }) => {
-      const { playerId, nickname, difficulty } = payload ?? {};
-      if (!playerId || !nickname || nickname.trim().length === 0) {
-        socket.emit(S2C.ERROR, { code: 'invalid_input', message: 'Nickname is required' });
+    // ── Add a bot ────────────────────────────────────────────────────────
+    // Any room, any open slot — there is no such thing as a "solo room".
+    socket.on(C2S.ADD_BOT, (payload: { difficulty: string }) => {
+      const playerId = socketIdToPlayerId.get(socket.id);
+      const room = playerId ? roomManager.getRoomByPlayer(playerId) : null;
+      if (!playerId || !room) {
+        socket.emit(S2C.ERROR, { code: 'not_in_room', message: getErrorMessage('not_in_room') });
         return;
       }
-      if (!isBotDifficulty(difficulty)) {
+      if (!isBotDifficulty(payload?.difficulty)) {
+        socket.emit(S2C.ERROR, { code: 'invalid_input', message: getErrorMessage('invalid_input') });
+        return;
+      }
+      if (room.state.phase !== 'lobby') {
+        socket.emit(S2C.ERROR, { code: 'wrong_phase', message: getErrorMessage('wrong_phase') });
+        return;
+      }
+      if (!room.getPlayer(playerId)?.isHost) {
+        socket.emit(S2C.ERROR, { code: 'forbidden', message: getErrorMessage('forbidden') });
+        return;
+      }
+
+      // addPlayer's own room_full check is the open-slot guard.
+      const attached = botDriver.attach(room, payload.difficulty);
+      if ('error' in attached) {
+        socket.emit(S2C.ERROR, { code: attached.error, message: getErrorMessage(attached.error) });
+        return;
+      }
+
+      afterRoomMutation(room); // the bot readies itself up
+      console.log(`[room] ${room.state.code} bot added (${payload.difficulty})`);
+    });
+
+    // ── Kick a player ────────────────────────────────────────────────────
+    socket.on(C2S.KICK_PLAYER, (payload: { playerId: string }) => {
+      const playerId = socketIdToPlayerId.get(socket.id);
+      const room = playerId ? roomManager.getRoomByPlayer(playerId) : null;
+      if (!playerId || !room) {
+        socket.emit(S2C.ERROR, { code: 'not_in_room', message: getErrorMessage('not_in_room') });
+        return;
+      }
+      const targetId = payload?.playerId;
+      if (!targetId) {
         socket.emit(S2C.ERROR, { code: 'invalid_input', message: getErrorMessage('invalid_input') });
         return;
       }
 
-      const result = roomManager.createRoom(playerId, nickname.trim());
+      const wasBot = room.getPlayer(targetId)?.isBot === true;
+      const result = room.kickPlayer(playerId, targetId);
       if ('error' in result) {
         socket.emit(S2C.ERROR, { code: result.error, message: getErrorMessage(result.error) });
         return;
       }
 
-      const room = result;
-      const attached = botDriver.attach(room, difficulty);
-      if ('error' in attached) {
-        roomManager.removeRoom(room.state.code);
-        socket.emit(S2C.ERROR, { code: attached.error, message: getErrorMessage(attached.error) });
-        return;
+      if (wasBot) {
+        botDriver.detach(room.state.code);
+      } else {
+        // Evict the kicked human's socket from the room but leave their
+        // connection alive — they should land back on Landing, not stare at a
+        // CONNECTION LOST modal.
+        const targetSocketId = playerIdToSocketId.get(targetId);
+        const targetSocket = targetSocketId ? io.sockets.sockets.get(targetSocketId) : null;
+        if (targetSocket) {
+          targetSocket.emit(S2C.KICK, { code: 'host_kick', reason: 'Removed by the host' });
+          targetSocket.leave(room.state.code);
+          targetSocket.leave(targetId);
+          unbindSocket(targetSocket.id);
+        }
       }
 
-      socket.join(room.state.code);
-      bindPlayer(socket, playerId);
-
-      socket.emit(S2C.ROOM_STATE, room.toClientState(playerId));
-      botDriver.tick(room, botHooks); // the bot readies itself up
-      console.log(`[room] ${room.state.code} solo (${difficulty}) created by ${nickname}`);
+      afterRoomMutation(room);
+      console.log(`[room] ${room.state.code} kicked ${targetId}${wasBot ? ' (bot)' : ''}`);
     });
 
     // ── Join room ────────────────────────────────────────────────────────
@@ -138,11 +178,8 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
         return;
       }
 
-      if (botDriver.isSolo(roomCode)) {
-        socket.emit(S2C.ERROR, { code: 'solo_room', message: getErrorMessage('solo_room') });
-        return;
-      }
-
+      // No solo-room rejection: a room holding a bot is simply full, and
+      // addPlayer already says so. Kick the bot and the seat opens up.
       if (room.state.phase !== 'lobby') {
         socket.emit(S2C.ERROR, { code: 'game_in_progress', message: 'Game already in progress' });
         return;
@@ -180,7 +217,10 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
       if (existingSocketId && existingSocketId !== socket.id) {
         const existing = io.sockets.sockets.get(existingSocketId);
         if (existing?.connected) {
-          existing.emit(S2C.KICK, { reason: 'Reconnected from another window' });
+          existing.emit(S2C.KICK, {
+            code: 'another_window',
+            reason: 'Reconnected from another window',
+          });
           existing.disconnect(true);
         }
         unbindSocket(existingSocketId);
@@ -209,10 +249,9 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
       unbindSocket(socket.id);
       room.removePlayer(playerId);
 
-      if (botDriver.isSolo(room.state.code)) {
-        // A bot must never be left holding a room on its own.
-        roomManager.removeRoom(room.state.code);
-      } else if (room.state.players.length === 0) {
+      // Covers both "nobody left" and "only bots left" — a bot must never be
+      // left holding a room on its own.
+      if (!room.hasHumanPlayers()) {
         roomManager.removeRoom(room.state.code);
       } else {
         afterRoomMutation(room);
@@ -346,7 +385,7 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
 
       if (room.state.phase === 'lobby') {
         room.removePlayer(playerId);
-        if (botDriver.isSolo(room.state.code) || room.state.players.length === 0) {
+        if (!room.hasHumanPlayers()) {
           roomManager.removeRoom(room.state.code);
         } else {
           afterRoomMutation(room);
@@ -419,7 +458,8 @@ function getErrorMessage(code: string): string {
     already_in_room: 'You are already in this room',
     room_not_found: 'Room not found. Check the code and try again.',
     wrong_phase: 'This action is not allowed in the current game phase',
-    forbidden: 'Only the host can change rules',
+    forbidden: 'Only the host can do that',
+    cannot_kick_self: 'You cannot kick yourself — leave the room instead',
     player_not_found: 'Player not found',
     already_submitted: 'You already submitted your secret',
     not_your_turn: 'It\'s not your turn',
@@ -435,7 +475,6 @@ function getErrorMessage(code: string): string {
     not_in_room: 'You are not in a room',
     game_in_progress: 'Game already in progress',
     reconnect_failed: 'Could not reconnect to your previous game',
-    solo_room: 'That room is a solo game against the computer',
   };
   return messages[code] || 'An error occurred';
 }
