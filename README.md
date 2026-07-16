@@ -2,14 +2,14 @@
 
 A 2-player realtime number codebreaking game.
 
-**▶ Play it live: <https://codebreaker-seven.vercel.app/>** — client on Vercel, server on Render.
+**▶ Play it live: <https://codebreaker-seven.vercel.app/>** — client on Vercel, server self-hosted on a VPS (Caddy + pm2).
 
 <!-- TODO(owner): add a short GIF of a round being played (already tracked in docs/planner.md) -->
 
 ## Stack
 
 - **Client**: React + TypeScript + Tailwind + Vite (Vercel)
-- **Server**: Node.js + Express + Socket.io (Render)
+- **Server**: Node.js + Express + Socket.io (self-hosted VPS — Caddy + pm2)
 - **Shared**: TypeScript types
 
 ## Structure
