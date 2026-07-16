@@ -17,7 +17,7 @@ export default function Lobby() {
 
   if (!roomState) return null;
 
-  const { code, players, rules, botDifficulties } = roomState;
+  const { code, players, rules, botDifficulties, isPrivate, displayNumber } = roomState;
   const me = players.find((p) => p.id === myId);
   const isHost = me?.isHost ?? false;
   const allReady = players.length === 2 && players.every((p) => p.isReady);
@@ -49,9 +49,18 @@ export default function Lobby() {
   return (
     <div className="min-h-screen flex flex-col">
       <header className="flex items-center justify-between border-b border-border-soft px-6 py-4">
-        {/* Always shown: kick the bot and the seat is joinable by code again. */}
+        {/* Public rooms are found by clicking them in the lobby, so the short
+            number is all anyone needs. A private room is only reachable by its
+            code, so that is what the host has to be able to read out. */}
         <div className="text-sm tracking-terminal">
-          ROOM <span className="text-muted">#</span>{code}
+          {isPrivate ? (
+            <>
+              ROOM <span className="text-muted">#</span>{code}
+              <span className="text-muted"> · private</span>
+            </>
+          ) : (
+            <>ROOM <span className="text-muted">#</span>{displayNumber}</>
+          )}
         </div>
         <TermButton variant="secondary" onClick={leaveRoom}>[ LEAVE ]</TermButton>
       </header>

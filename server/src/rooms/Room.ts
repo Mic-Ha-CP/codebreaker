@@ -11,7 +11,9 @@ import type {
   ClientPlayerGameState,
   GameEndPayload,
   BotDifficulty,
+  RoomSummary,
 } from '../../../shared/types.js';
+import { meta } from '../../../shared/meta.js';
 import { calculateFeedback } from '../game/feedback.js';
 import { validateSecret, validateGuess, validateRules } from '../game/validation.js';
 
@@ -39,8 +41,38 @@ export class Room {
       isDraw: false,
       pendingTiebreaker: null,
       botDifficulties: {},
+      isPrivate: false,
+      displayNumber: null,
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
+    };
+  }
+
+  /** Set once at creation by RoomManager, which owns codes and numbers. */
+  setPrivate(isPrivate: boolean): void {
+    this.state.isPrivate = isPrivate;
+  }
+
+  setDisplayNumber(n: number | null): void {
+    this.state.displayNumber = n;
+  }
+
+  /**
+   * The room as the lobby list sees it: a whitelist of the fields a list row
+   * needs. Same split as toClientState — the projection mechanism is generic,
+   * the fields (Rules) are this game's. Anything not named here cannot leak,
+   * which is why secrets and playerStates are structurally absent rather than
+   * filtered out.
+   */
+  toSummary(): RoomSummary {
+    return {
+      code: this.state.code,
+      displayNumber: this.state.displayNumber ?? 0,
+      hostNickname: this.state.players.find((p) => p.isHost)?.nickname ?? '',
+      playerCount: this.state.players.length,
+      maxPlayers: meta.maxPlayers,
+      rules: this.state.rules,
+      status: this.state.phase === 'lobby' ? 'waiting' : 'playing',
     };
   }
 
@@ -60,7 +92,9 @@ export class Room {
     nickname: string,
     opts: { isBot?: boolean } = {}
   ): { ok: true } | { error: string } {
-    if (this.state.players.length >= 2) {
+    // meta.maxPlayers is the platform-facing declaration of this game's size;
+    // reading it here keeps the seat limit from drifting away from it.
+    if (this.state.players.length >= meta.maxPlayers) {
       return { error: 'room_full' };
     }
     if (this.state.players.find((p) => p.id === playerId)) {
@@ -441,6 +475,8 @@ export class Room {
       isDraw: this.state.isDraw,
       pendingTiebreaker: this.state.pendingTiebreaker,
       botDifficulties: this.state.botDifficulties,
+      isPrivate: this.state.isPrivate,
+      displayNumber: this.state.displayNumber,
       opponentTypingBuffer: null,
       createdAt: this.state.createdAt,
       lastActivityAt: this.state.lastActivityAt,

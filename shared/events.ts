@@ -12,6 +12,9 @@ export const C2S = {
   SUBMIT_GUESS: 'c:submit_guess',
   REQUEST_REMATCH: 'c:request_rematch',
   RECONNECT: 'c:reconnect',
+  // Room discovery — see docs/lobby-broadcast-pattern.md
+  LOBBY_SUBSCRIBE: 'c:lobby_subscribe',
+  LOBBY_UNSUBSCRIBE: 'c:lobby_unsubscribe',
 } as const;
 
 // Server → Client
@@ -22,4 +25,5 @@ export const S2C = {
   REVEAL_GUESS: 's:reveal_guess',
   GAME_END: 's:game_end',
   KICK: 's:kick',
+  LOBBY_LIST: 's:lobby_list',
 } as const;

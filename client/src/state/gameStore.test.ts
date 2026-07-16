@@ -71,6 +71,8 @@ function mockRoomState(rules: Rules, phase: ClientRoomState['phase']): ClientRoo
     isDraw: false,
     pendingTiebreaker: null,
     botDifficulties: {},
+    isPrivate: false,
+    displayNumber: 1,
     opponentTypingBuffer: null,
     createdAt: Date.now(),
     lastActivityAt: Date.now(),
@@ -352,6 +354,28 @@ describe('gameStore — stable playerId + session persistence', () => {
     expect(ev?.payload).toMatchObject({ playerId: 'pid-2', nickname: 'bob', code: 'ABCD' });
   });
 
+  it('createRoom carries the private flag through', () => {
+    useGameStore.setState({ nickname: 'alice' });
+    useGameStore.getState().connect();
+
+    useGameStore.getState().createRoom();
+    expect(emitted.at(-1)?.payload).toMatchObject({ isPrivate: false });
+
+    useGameStore.getState().createRoom({ isPrivate: true });
+    expect(emitted.at(-1)?.payload).toMatchObject({ isPrivate: true });
+  });
+
+  it('VS COMPUTER creates a PRIVATE room, closing the seat-grab window', () => {
+    // Between create and add_bot the room has a free seat; if it were public a
+    // lobby click could take it and the bot would fail room_full.
+    useGameStore.setState({ nickname: 'alice' });
+    useGameStore.getState().connect();
+    useGameStore.getState().createSolo('hard');
+    expect(emitted.find((e) => e.event === 'c:create_room')?.payload).toMatchObject({
+      isPrivate: true,
+    });
+  });
+
   it('VS COMPUTER is sugar: a plain create_room, then add_bot once the room lands', async () => {
     localStorage.setItem('cb_playerId', 'pid-solo');
     useGameStore.setState({ nickname: 'alice' });
@@ -438,5 +462,56 @@ describe('gameStore — stable playerId + session persistence', () => {
     useGameStore.getState().connect();
     handlers.get('connect')!();
     expect(emitted.find((e) => e.event === 'c:reconnect')).toBeUndefined();
+  });
+});
+
+describe('gameStore — lobby channel', () => {
+  it('subscribe/unsubscribe emit the channel events', () => {
+    useGameStore.getState().connect();
+    useGameStore.getState().lobbySubscribe();
+    expect(emitted.some((e) => e.event === 'c:lobby_subscribe')).toBe(true);
+
+    useGameStore.getState().lobbyUnsubscribe();
+    expect(emitted.some((e) => e.event === 'c:lobby_unsubscribe')).toBe(true);
+  });
+
+  it('s:lobby_list populates the room list', () => {
+    useGameStore.getState().connect();
+    const rooms = [
+      {
+        code: 'AAAA',
+        displayNumber: 1,
+        hostNickname: 'Static Owl',
+        playerCount: 1,
+        maxPlayers: 2,
+        rules: RULES_4,
+        status: 'waiting' as const,
+      },
+    ];
+    handlers.get('s:lobby_list')!({ rooms });
+    expect(useGameStore.getState().lobbyRooms).toEqual(rooms);
+  });
+
+  it('drops the stale list on unsubscribe', () => {
+    useGameStore.getState().connect();
+    handlers.get('s:lobby_list')!({ rooms: [{ code: 'AAAA' }] });
+    expect(useGameStore.getState().lobbyRooms).toHaveLength(1);
+    useGameStore.getState().lobbyUnsubscribe();
+    expect(useGameStore.getState().lobbyRooms).toEqual([]);
+  });
+
+  it('re-subscribes on reconnect while on Landing', () => {
+    // A reconnect loses server-side channel membership, but Landing never
+    // unmounts, so its effect cannot re-run.
+    useGameStore.getState().connect();
+    handlers.get('connect')!();
+    expect(emitted.filter((e) => e.event === 'c:lobby_subscribe')).toHaveLength(1);
+  });
+
+  it('does NOT re-subscribe on reconnect while in a room', () => {
+    useGameStore.getState().connect();
+    useGameStore.setState({ roomState: mockRoomState(RULES_4, 'in_progress') });
+    handlers.get('connect')!();
+    expect(emitted.some((e) => e.event === 'c:lobby_subscribe')).toBe(false);
   });
 });

@@ -5,6 +5,9 @@ import { RoomManager } from './rooms/RoomManager.js';
 import { Room } from './rooms/Room.js';
 import { BotDriver, type BotHooks } from './game/bot/BotDriver.js';
 import { isBotDifficulty } from './game/bot/solver.js';
+import { LobbyBroadcaster } from './rooms/LobbyBroadcaster.js';
+import { LOBBY_CHANNEL, buildLobbyList } from './rooms/lobby.js';
+import { uniqueNickname } from '../../shared/names.js';
 import type { GuessResult, PlayerId } from '../../shared/types.js';
 
 let roomManager: RoomManager;
@@ -14,12 +17,22 @@ const DISCONNECT_FORFEIT_MS = 30_000;
 export function initSocket(server: HTTPServer, clientOrigin: string) {
   roomManager = new RoomManager();
   const botDriver = new BotDriver();
-  // Covers every exit a room has, including RoomManager's idle sweep — without
-  // this the driver would leak solver state for swept solo rooms.
-  roomManager.onRoomRemoved((code) => botDriver.detach(code));
 
   const io = new Server(server, {
     cors: { origin: clientOrigin, credentials: true },
+  });
+
+  const lobby = new LobbyBroadcaster(
+    () => buildLobbyList(roomManager.allRooms()),
+    (rooms) => io.to(LOBBY_CHANNEL).emit(S2C.LOBBY_LIST, { rooms })
+  );
+
+  // Covers every exit a room has, including RoomManager's idle sweep — without
+  // this the driver would leak solver state for swept rooms, and the lobby
+  // would keep listing rooms that no longer exist.
+  roomManager.onRoomRemoved((code) => {
+    botDriver.detach(code);
+    lobby.schedule();
   });
 
   const botHooks: BotHooks = {
@@ -29,12 +42,14 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
 
   /**
    * The single choke point after any room mutation: push the new state to the
-   * humans, then let the bot notice whether it now owes a move. A no-op for
-   * ordinary 2-human rooms.
+   * humans, let the bot notice whether it now owes a move, and refresh the
+   * lobby list. The lobby refresh is coalesced and deduped, so calling it on
+   * every guess costs nothing.
    */
   function afterRoomMutation(room: Room): void {
     broadcastRoomState(io, room);
     botDriver.tick(room, botHooks);
+    lobby.schedule();
   }
 
   // Track current socket per playerId so we can: (a) route emits via
@@ -63,14 +78,16 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
     console.log(`[socket] connected: ${socket.id}`);
 
     // ── Create room ──────────────────────────────────────────────────────
-    socket.on(C2S.CREATE_ROOM, (payload: { playerId: string; nickname: string; rules?: Partial<import('../../shared/types.js').Rules> }) => {
-      const { playerId, nickname, rules } = payload;
+    socket.on(C2S.CREATE_ROOM, (payload: { playerId: string; nickname: string; rules?: Partial<import('../../shared/types.js').Rules>; isPrivate?: boolean }) => {
+      const { playerId, nickname, rules, isPrivate } = payload;
       if (!playerId || !nickname || nickname.trim().length === 0) {
         socket.emit(S2C.ERROR, { code: 'invalid_input', message: 'Nickname is required' });
         return;
       }
 
-      const result = roomManager.createRoom(playerId, nickname.trim());
+      const result = roomManager.createRoom(playerId, nickname.trim(), undefined, {
+        isPrivate: isPrivate === true,
+      });
       if ('error' in result) {
         socket.emit(S2C.ERROR, { code: result.error, message: getErrorMessage(result.error) });
         return;
@@ -78,6 +95,7 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
 
       const room = result;
       socket.join(room.state.code);
+      socket.leave(LOBBY_CHANNEL); // in a room now; stop receiving the list
       bindPlayer(socket, playerId);
 
       if (rules) {
@@ -86,7 +104,22 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
 
       const clientState = room.toClientState(playerId);
       socket.emit(S2C.ROOM_STATE, clientState);
-      console.log(`[room] ${room.state.code} created by ${nickname} (${playerId})`);
+      lobby.schedule();
+      console.log(
+        `[room] ${room.state.code} created by ${nickname} (${playerId})` +
+          `${isPrivate ? ' [private]' : ` [#${room.state.displayNumber}]`}`
+      );
+    });
+
+    // ── Lobby channel ────────────────────────────────────────────────────
+    // See docs/lobby-broadcast-pattern.md. Summaries only — never room state.
+    socket.on(C2S.LOBBY_SUBSCRIBE, () => {
+      socket.join(LOBBY_CHANNEL);
+      socket.emit(S2C.LOBBY_LIST, { rooms: lobby.current() });
+    });
+
+    socket.on(C2S.LOBBY_UNSUBSCRIBE, () => {
+      socket.leave(LOBBY_CHANNEL);
     });
 
     // ── Add a bot ────────────────────────────────────────────────────────
@@ -185,17 +218,25 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
         return;
       }
 
-      const result = room.addPlayer(playerId, nickname.trim());
+      // Two identical names in one room is just confusing to read. The name is
+      // display-only (identity is playerId), so re-rolling the joiner's is free.
+      const displayName = uniqueNickname(
+        nickname.trim(),
+        room.state.players.map((p) => p.nickname)
+      );
+
+      const result = room.addPlayer(playerId, displayName);
       if ('error' in result) {
         socket.emit(S2C.ERROR, { code: result.error, message: getErrorMessage(result.error) });
         return;
       }
 
       socket.join(room.state.code);
+      socket.leave(LOBBY_CHANNEL); // in a room now; stop receiving the list
       bindPlayer(socket, playerId);
 
       afterRoomMutation(room);
-      console.log(`[room] ${playerId} (${nickname}) joined ${room.state.code}`);
+      console.log(`[room] ${playerId} (${displayName}) joined ${room.state.code}`);
     });
 
     // ── Reconnect ────────────────────────────────────────────────────────

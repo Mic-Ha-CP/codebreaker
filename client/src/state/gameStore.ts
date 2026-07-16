@@ -10,6 +10,7 @@ import type {
   Player,
   Rules,
   RoomPhase,
+  RoomSummary,
 } from '../../../shared/types';
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
@@ -86,6 +87,9 @@ interface GameStore {
   roomState: ClientRoomState | null;
   gameEndPayload: GameEndPayload | null;
 
+  // lobby (room discovery) — only populated while on Landing
+  lobbyRooms: RoomSummary[];
+
   // digit input (shared between SetSecret and Game screens)
   inputBuffer: (number | null)[];
   cursorPos: number;
@@ -111,9 +115,11 @@ interface GameStore {
   connect: () => void;
   disconnect: () => void;
   forceReconnect: () => void;
-  createRoom: (rules?: Partial<Rules>) => void;
+  createRoom: (opts?: { rules?: Partial<Rules>; isPrivate?: boolean }) => void;
   createSolo: (difficulty: BotDifficulty) => void;
   joinRoom: (code: string) => void;
+  lobbySubscribe: () => void;
+  lobbyUnsubscribe: () => void;
   leaveRoom: () => void;
   addBot: (difficulty: BotDifficulty) => void;
   kickPlayer: (playerId: string) => void;
@@ -244,6 +250,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   opponentTyping: null,
   lang: 'en',
   pendingBotDifficulty: null,
+  lobbyRooms: [],
 
   // ── local ──────────────────────────────────────────────────────────────────
 
@@ -289,6 +296,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (session) {
         s.emit(C2S.RECONNECT, session);
       }
+      // A reconnect loses our server-side channel membership, but Landing stays
+      // mounted throughout — so its subscribe effect never re-runs. Re-join here.
+      if (!get().roomState) {
+        s.emit(C2S.LOBBY_SUBSCRIBE);
+      }
+    });
+
+    s.on('s:lobby_list', ({ rooms }: { rooms: RoomSummary[] }) => {
+      set({ lobbyRooms: rooms });
     });
 
     s.on('disconnect', () => {
@@ -412,21 +428,40 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!socket.connected) socket.connect();
   },
 
-  createRoom: (rules) => {
+  createRoom: (opts = {}) => {
     const { nickname } = get();
     if (!nickname.trim()) return;
     const playerId = getOrCreatePlayerId();
-    socket?.emit(C2S.CREATE_ROOM, { playerId, nickname: nickname.trim(), rules });
+    socket?.emit(C2S.CREATE_ROOM, {
+      playerId,
+      nickname: nickname.trim(),
+      rules: opts.rules,
+      isPrivate: opts.isPrivate === true,
+    });
+  },
+
+  lobbySubscribe: () => {
+    socket?.emit(C2S.LOBBY_SUBSCRIBE);
+  },
+
+  lobbyUnsubscribe: () => {
+    socket?.emit(C2S.LOBBY_UNSUBSCRIBE);
+    set({ lobbyRooms: [] });
   },
 
   // Sugar, not a room type: create an ordinary room and add a bot to it. The
   // add fires from the s:room_state handler once the room exists.
+  //
+  // Private on purpose. Between create and add_bot the room briefly has a free
+  // seat, and a public one could be grabbed from the lobby in that gap — the
+  // bot would then fail with room_full and you would be in a PvP match you
+  // never asked for. Unlisted also keeps un-joinable solo games out of the list.
   createSolo: (difficulty) => {
     const { nickname } = get();
     if (!nickname.trim()) return;
     const playerId = getOrCreatePlayerId();
     set({ pendingBotDifficulty: difficulty });
-    socket?.emit(C2S.CREATE_ROOM, { playerId, nickname: nickname.trim() });
+    socket?.emit(C2S.CREATE_ROOM, { playerId, nickname: nickname.trim(), isPrivate: true });
   },
 
   addBot: (difficulty) => {

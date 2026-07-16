@@ -8,6 +8,7 @@ export class RoomManager {
   private readonly IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private onRemove: ((code: RoomCode) => void) | null = null;
+  private usedNumbers = new Set<number>();
 
   constructor() {
     this.startCleanupTimer();
@@ -23,7 +24,12 @@ export class RoomManager {
     this.onRemove = cb;
   }
 
-  createRoom(hostId: PlayerId, nickname: string, rules?: Partial<Rules>): Room | { error: string } {
+  createRoom(
+    hostId: PlayerId,
+    nickname: string,
+    rules?: Partial<Rules>,
+    opts: { isPrivate?: boolean } = {}
+  ): Room | { error: string } {
     if (this.rooms.size >= this.MAX_ROOMS) {
       return { error: 'server_full' };
     }
@@ -44,8 +50,22 @@ export class RoomManager {
       room.updateRules(hostId, rules);
     }
 
+    // Dual-track addressing. Public rooms get a short number to click in the
+    // lobby; private rooms get none on purpose — a sequential number would let
+    // anyone walk the list of unlisted rooms, which is the point of hiding them.
+    if (opts.isPrivate) {
+      room.setPrivate(true);
+    } else {
+      room.setDisplayNumber(this.allocateDisplayNumber());
+    }
+
     this.rooms.set(code, room);
     return room;
+  }
+
+  /** Every live room. The lobby projection filters and maps these. */
+  allRooms(): Room[] {
+    return [...this.rooms.values()];
   }
 
   getRoom(code: RoomCode): Room | null {
@@ -62,7 +82,21 @@ export class RoomManager {
   }
 
   removeRoom(code: RoomCode): void {
-    if (this.rooms.delete(code)) this.onRemove?.(code);
+    const room = this.rooms.get(code);
+    if (!this.rooms.delete(code)) return;
+    // Free the number so the list stays tidy — #1 reopens once #1 closes.
+    if (room?.state.displayNumber !== null && room?.state.displayNumber !== undefined) {
+      this.usedNumbers.delete(room.state.displayNumber);
+    }
+    this.onRemove?.(code);
+  }
+
+  /** Lowest unused, so the visible numbers stay small and stable. */
+  private allocateDisplayNumber(): number {
+    let n = 1;
+    while (this.usedNumbers.has(n)) n++;
+    this.usedNumbers.add(n);
+    return n;
   }
 
   private startCleanupTimer(): void {

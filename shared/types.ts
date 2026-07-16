@@ -76,8 +76,34 @@ export interface RoomState {
    * this is a property of the player, not of the room.
    */
   botDifficulties: Record<PlayerId, BotDifficulty>;
+  /** Private rooms are never listed in the lobby; they are joined by code. */
+  isPrivate: boolean;
+  /**
+   * Short number shown to players (#1, #2), null for private rooms.
+   * Display only — `code` remains the room's identity either way. Private
+   * rooms deliberately get none: a sequential number would make them
+   * enumerable, which is the whole thing being avoided.
+   */
+  displayNumber: number | null;
   createdAt: number;
   lastActivityAt: number;
+}
+
+// === Lobby ===
+/**
+ * A room as the lobby list sees it. A whitelist projection, NOT room state —
+ * no playerStates, no secrets, no player ids. See Room.toSummary() and
+ * docs/lobby-broadcast-pattern.md.
+ */
+export interface RoomSummary {
+  /** Join key. Public rooms are listed anyway, so this is not a secret. */
+  code: RoomCode;
+  displayNumber: number;
+  hostNickname: string;
+  playerCount: number;
+  maxPlayers: number;
+  rules: Rules;
+  status: 'waiting' | 'playing';
 }
 
 // === Client-visible room state (secrets masked) ===
