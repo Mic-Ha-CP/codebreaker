@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { TermButton } from "@/components/codebreaker/TermButton";
 import { getOrCreateNickname, persistNickname } from "@/lib/nickname";
 import { useGameStore } from "@/state/gameStore";
+import { generateName } from "../../../shared/names";
 import type { BotDifficulty, RoomSummary, Rules } from "../../../shared/types";
 
 const DIFFICULTIES: Array<{ id: BotDifficulty; label: string; blurb: string }> = [
@@ -44,6 +45,10 @@ export default function Landing() {
     persistNickname(value);
   };
 
+  // Without this the generated name just appears and reads like a bug. A reroll
+  // button says "this is a dice roll, and it's yours to change".
+  const rerollNickname = () => editNickname(generateName());
+
   const handleCreate = () => {
     setNickname(nickname);
     createRoom({ isPrivate });
@@ -82,12 +87,23 @@ export default function Landing() {
 
         <div className="flex flex-col gap-3">
           <label className="text-xs uppercase tracking-terminal text-muted">nickname</label>
-          <input
-            value={nickname}
-            onChange={(e) => editNickname(e.target.value)}
-            placeholder="enter nickname"
-            className="w-full bg-transparent border border-border px-4 py-3 text-foreground placeholder:text-muted focus:outline-none focus:border-foreground transition-colors"
-          />
+          <div className="flex gap-2">
+            <input
+              value={nickname}
+              onChange={(e) => editNickname(e.target.value)}
+              placeholder="enter nickname"
+              className="flex-1 min-w-0 bg-transparent border border-border px-4 py-3 text-foreground placeholder:text-muted focus:outline-none focus:border-foreground transition-colors"
+            />
+            <button
+              type="button"
+              onClick={rerollNickname}
+              title="roll a new name"
+              aria-label="roll a new name"
+              className="shrink-0 min-w-[44px] min-h-[44px] border border-border px-3 text-muted hover:border-foreground hover:text-foreground focus:outline-none focus:border-foreground transition-colors"
+            >
+              ⟳
+            </button>
+          </div>
         </div>
 
         <div className="flex flex-col gap-3">
