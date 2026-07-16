@@ -25,5 +25,10 @@ export const S2C = {
   REVEAL_GUESS: 's:reveal_guess',
   GAME_END: 's:game_end',
   KICK: 's:kick',
+  /**
+   * The room went away underneath you. Deliberately NOT a kick — nobody removed
+   * you, the room stopped existing. See the idle sweep in RoomManager.
+   */
+  ROOM_CLOSED: 's:room_closed',
   LOBBY_LIST: 's:lobby_list',
 } as const;

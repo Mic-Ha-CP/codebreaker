@@ -458,6 +458,61 @@ describe('kickPlayer', () => {
   });
 });
 
+describe('hasConnectedHumans', () => {
+  // The idle sweep gates on this. It must be stricter than hasHumanPlayers().
+  it('true while a human is connected', () => {
+    const room = new Room('TEST');
+    room.addPlayer('A', 'alice');
+    expect(room.hasConnectedHumans()).toBe(true);
+  });
+
+  it('false once the only human is marked disconnected', () => {
+    const room = new Room('TEST');
+    room.addPlayer('A', 'alice');
+    room.markDisconnected('A');
+    expect(room.hasConnectedHumans()).toBe(false);
+    // ...but they are still *in* the room — this is the distinction.
+    expect(room.hasHumanPlayers()).toBe(true);
+  });
+
+  it('true again after they reconnect', () => {
+    const room = new Room('TEST');
+    room.addPlayer('A', 'alice');
+    room.markDisconnected('A');
+    room.markReconnected('A');
+    expect(room.hasConnectedHumans()).toBe(true);
+  });
+
+  it('a bot does not count — it is always "connected"', () => {
+    const room = new Room('TEST');
+    room.addPlayer('A', 'alice');
+    room.addPlayer('BOT', 'CPU', { isBot: true });
+    room.markDisconnected('A');
+    expect(room.hasConnectedHumans()).toBe(false);
+  });
+
+  it('false for an empty room', () => {
+    expect(new Room('TEST').hasConnectedHumans()).toBe(false);
+  });
+
+  it('one of two still counts', () => {
+    const room = new Room('TEST');
+    room.addPlayer('A', 'alice');
+    room.addPlayer('B', 'bob');
+    room.markDisconnected('A');
+    expect(room.hasConnectedHumans()).toBe(true);
+  });
+});
+
+describe('touch', () => {
+  it('moves the idle clock forward', () => {
+    const room = new Room('TEST');
+    room.state.lastActivityAt = Date.now() - 10 * 60 * 1000;
+    room.touch();
+    expect(Date.now() - room.state.lastActivityAt).toBeLessThan(1000);
+  });
+});
+
 describe('hasHumanPlayers', () => {
   it('true while a human is seated', () => {
     const room = new Room('TEST');

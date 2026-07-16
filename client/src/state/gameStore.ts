@@ -307,6 +307,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({ lobbyRooms: rooms });
     });
 
+    // The room stopped existing while we were in it. Not a kick — nobody
+    // removed us — so don't say "kicked".
+    s.on('s:room_closed', ({ reason }: { reason?: string }) => {
+      toast.warning(
+        reason === 'idle'
+          ? 'Room closed — it was inactive too long.'
+          : 'Room closed.'
+      );
+      clearStoredSession();
+      set({
+        roomState: null,
+        gameEndPayload: null,
+        inputBuffer: [null, null, null, null],
+        cursorPos: 0,
+      });
+    });
+
     s.on('disconnect', () => {
       set({ connected: false });
     });

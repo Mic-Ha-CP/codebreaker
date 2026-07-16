@@ -30,8 +30,19 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
   // Covers every exit a room has, including RoomManager's idle sweep — without
   // this the driver would leak solver state for swept rooms, and the lobby
   // would keep listing rooms that no longer exist.
-  roomManager.onRoomRemoved((code) => {
+  roomManager.onRoomRemoved((code, reason) => {
     botDriver.detach(code);
+
+    // Anyone still in this socket room did not ask to leave — the room vanished
+    // under them. Say so, instead of leaving them to discover it when their next
+    // guess bounces back as 'not_in_room' (which is how a live game's players
+    // used to find out the sweep had eaten their room).
+    //
+    // Every normal removal path socket.leave()s first, and the sweep now only
+    // runs when nobody is connected — so in practice this reaches nobody. It is
+    // a backstop for the next path that forgets, not a feature.
+    io.to(code).emit(S2C.ROOM_CLOSED, { reason });
+
     lobby.schedule();
   });
 
@@ -358,6 +369,13 @@ export function initSocket(server: HTTPServer, clientOrigin: string) {
       const playerId = socketIdToPlayerId.get(socket.id);
       const room = playerId ? roomManager.getRoomByPlayer(playerId) : null;
       if (!playerId || !room) return;
+
+      // Typing is the only sign of life the server gets between guesses. It
+      // does not change room state, so without this the activity clock ignores
+      // a player actively composing a guess. (Not sufficient on its own — a
+      // player who is only *thinking* still emits nothing; that is what the
+      // sweep's connected-humans gate is for.)
+      room.touch();
 
       const opponentId = room.getOpponentId(playerId);
       if (opponentId) {

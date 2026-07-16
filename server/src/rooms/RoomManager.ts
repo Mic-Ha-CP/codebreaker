@@ -2,12 +2,15 @@ import { Room } from './Room.js';
 import { generateRoomCode } from '../utils/roomCode.js';
 import type { PlayerId, RoomCode, Rules } from '../../../shared/types.js';
 
+/** Why a room went away. `idle` means the sweep reclaimed it. */
+export type RoomRemovalReason = 'manual' | 'idle';
+
 export class RoomManager {
   private rooms = new Map<RoomCode, Room>();
   private readonly MAX_ROOMS = 5;
   private readonly IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
-  private onRemove: ((code: RoomCode) => void) | null = null;
+  private onRemove: ((code: RoomCode, reason: RoomRemovalReason) => void) | null = null;
   private usedNumbers = new Set<number>();
 
   constructor() {
@@ -20,7 +23,7 @@ export class RoomManager {
    * (Generic lifecycle, no game knowledge — the vs-computer driver uses it to
    * drop its solver state and cancel pending timers.)
    */
-  onRoomRemoved(cb: (code: RoomCode) => void): void {
+  onRoomRemoved(cb: (code: RoomCode, reason: RoomRemovalReason) => void): void {
     this.onRemove = cb;
   }
 
@@ -81,14 +84,14 @@ export class RoomManager {
     return null;
   }
 
-  removeRoom(code: RoomCode): void {
+  removeRoom(code: RoomCode, reason: RoomRemovalReason = 'manual'): void {
     const room = this.rooms.get(code);
     if (!this.rooms.delete(code)) return;
     // Free the number so the list stays tidy — #1 reopens once #1 closes.
     if (room?.state.displayNumber !== null && room?.state.displayNumber !== undefined) {
       this.usedNumbers.delete(room.state.displayNumber);
     }
-    this.onRemove?.(code);
+    this.onRemove?.(code, reason);
   }
 
   /** Lowest unused, so the visible numbers stay small and stable. */
@@ -99,23 +102,33 @@ export class RoomManager {
     return n;
   }
 
+  /**
+   * Reclaims abandoned rooms so the MAX_ROOMS slots don't leak.
+   *
+   * Idle time alone is NOT evidence of abandonment, and treating it as such
+   * deleted live games out from under people: two players thinking for five
+   * minutes on one turn found their room gone when they finally submitted,
+   * because nothing a *thinking* player does touches the activity clock. So the
+   * gate is "is anyone still connected", not "how long since the last move".
+   *
+   * Live games with a vanished player don't need policing here — the 30s
+   * forfeit already ends them, which drops them to `ended` with nobody
+   * connected, and this reclaims them on a later pass.
+   */
   private startCleanupTimer(): void {
     this.cleanupTimer = setInterval(() => {
       const now = Date.now();
 
       for (const [code, room] of this.rooms.entries()) {
         const idleTime = now - room.state.lastActivityAt;
+        if (idleTime <= this.IDLE_TIMEOUT_MS) continue;
+        if (room.hasConnectedHumans()) continue;
 
-        if (idleTime > this.IDLE_TIMEOUT_MS) {
-          // Room empty or idle too long → remove
-          if (room.state.players.length === 0) {
-            this.removeRoom(code);
-          } else {
-            // If game is in progress and idle too long, could forfeit
-            // For now, just remove empty rooms, flag non-empty ones
-            this.removeRoom(code);
-          }
-        }
+        console.log(
+          `[room] ${code} swept — idle ${Math.round(idleTime / 1000)}s, no connected humans ` +
+            `(phase=${room.state.phase}, players=${room.state.players.length})`
+        );
+        this.removeRoom(code, 'idle');
       }
     }, 60_000); // Check every 60s
   }

@@ -165,6 +165,26 @@ export class Room {
     return this.state.players.some((p) => !p.isBot);
   }
 
+  /**
+   * A human who is actually here *right now*. Stricter than hasHumanPlayers():
+   * this also excludes people the server has marked disconnected.
+   *
+   * The idle sweep gates on this rather than on elapsed time, because elapsed
+   * time is not evidence of abandonment — a player can stare at one turn for
+   * five minutes, and thinking is not something the server can observe.
+   */
+  hasConnectedHumans(): boolean {
+    return this.state.players.some((p) => !p.isBot && p.connected);
+  }
+
+  /**
+   * Bumps the idle clock. For signs of life that aren't state changes — typing,
+   * say — which the sweep would otherwise never see.
+   */
+  touch(): void {
+    this.state.lastActivityAt = Date.now();
+  }
+
   getPlayer(playerId: PlayerId): Player | undefined {
     return this.state.players.find((p) => p.id === playerId);
   }
